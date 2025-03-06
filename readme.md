@@ -51,7 +51,6 @@ run the program with the following options (the default zig install directory is
    - `-e, --detect_edges`: enable edge detection (optional)
    - `    --sigma1 <float>`: set the sigma1 value for DoG filter (optional, default: 0.3)
    - `    --sigma2 <float>`: set the sigma2 value for DoG filter (optional, default: 1.0)
-   - `    --dither floydstein`: enable dithering (currently only supports floydstein algorithm)
    - `-b, --brightness_boost <float>`: increase/decrease perceived brightness (optional, default: 1.0)
    advanced options:
    - `    --full_characters`: Uses all ascii characters in generated output.
@@ -63,6 +62,10 @@ run the program with the following options (the default zig install directory is
    - `    --keep_audio`: Preserves audio from input video.
    - `    --stretched`: Resizes media to fit terminal window
    - `-f, --frame_rate`: Target frame rate for video output (default: matches input fps)
+   - `-d, --dither <str>`: Dithering, supported values: "floydstein" (default: "floydstein")
+   - `    --fg <str>`: Set a 6-digit hex value like "#ffffff" for the foreground color (default: "#d36a6f")
+   - `    --bg <str>`: Set a 6-digit hex value like "#000000" for the background color (default: "#15091b")
+   - `    --transparent_bg`: Set the background to transparent
 
 >To render on the terminal directly, just omit the output option.
 
