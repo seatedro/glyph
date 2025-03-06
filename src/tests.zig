@@ -106,6 +106,7 @@ test "text" {
         .bg_color = null,
         .fg_color = null,
         .threshold_disabled = false,
+        .transparent_bg = false,
     };
 
     const ascii_txt = try image.generateAsciiTxt(allocator, img, null, args);
