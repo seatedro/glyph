@@ -41,6 +41,7 @@ fn parseArgs(allocator: std.mem.Allocator) !core.CoreParams {
         \\-d, --dither <str>             Dithering, supported values: "floydstein" (default: "floydstein")
         \\    --fg <str>                 Enter a hex value like "#ffffff" for the foreground color (default: "#d36a6f")
         \\    --bg <str>                 Enter a hex value like "#000000" for the background color (default: "#15091b")
+        \\    --transparent_bg           Set the background to transparent
         \\<str>...
     );
 
@@ -160,6 +161,7 @@ fn parseArgs(allocator: std.mem.Allocator) !core.CoreParams {
         .dither = dither,
         .fg_color = fg_color,
         .bg_color = bg_color,
+        .transparent_bg = res.args.transparent_bg != 0,
     };
 }
 

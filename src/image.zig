@@ -218,21 +218,20 @@ fn saveOutputImage(ascii_img: []u8, img: core.Image, args: core.CoreParams) !voi
 
     out_w = @max(out_w, 1);
     out_h = @max(out_h, 1);
-
+    const channels: u8 = if (args.transparent_bg) 4 else 3;
     const save_result = stb.stbi_write_png(
         @ptrCast(args.output.?.ptr),
         @intCast(out_w),
         @intCast(out_h),
-        @intCast(img.channels),
+        channels,
         @ptrCast(ascii_img.ptr),
-        @intCast(out_w * 3),
+        @intCast(out_w * channels),
     );
     if (save_result == 0) {
         std.debug.print("Error writing output image\n", .{});
         return error.ImageWriteFailed;
     }
 }
-
 pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
     const original_img = try loadAndScaleImage(allocator, args);
 
