@@ -22,12 +22,14 @@ jobs:
           # x86
           - os: ubuntu-latest
             arch: x86_64
+          - os: windows-latest
+            arch: x86_64
 
     steps:
     - uses: actions/checkout@v4
 
     - name: Set up Zig
-      uses: goto-bus-stop/setup-zig@v2
+      uses: mlugg/setup-zig@v1
       with:
         version: 0.14.0
 
@@ -42,9 +44,16 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev pkg-config
 
+    - name: Setup FFmpeg (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        choco install -y ffmpeg-shared
+        set INCLUDE=%INCLUDE%;"C:\ProgramData\chocolatey\lib\ffmpeg-shared\tools\ffmpeg-7.1-full_build-shared\include"
+        set LIB=%LIB%;"C:\ProgramData\chocolatey\lib\ffmpeg-shared\tools\ffmpeg-7.1-full_build-shared\lib"
+
     - name: Test
       run: |
-        zig build -Doptimize=ReleaseFast test
+        zig build --release=fast test
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
