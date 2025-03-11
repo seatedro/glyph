@@ -2,26 +2,32 @@
 
 converts images/video to ascii art
 
-## installation
 
-### brew
-```bash
-brew install glyph
-```
+## Dependencies
 
-make sure you have ffmpeg installed (along with the respective headers)
+these dependencies are only for the `av` library to output videos. This will be opt-in in the future.
 
-usually on linux you just install the headers like so:
+#### Linux:
 ```bash
 sudo apt-get install libavutil-dev libavformat-dev libavcodec-dev libswscale-dev
 ```
 
-on macos you would do
+#### MacOS:
 ```bash
 brew install ffmpeg pkgconf
 ```
 
-windows users, may god help you
+#### Windows:
+```bash
+choco install ffmpeg-shared
+```
+
+## Installing
+
+#### Homebrew
+```bash
+brew install glyph
+```
 
 ### build from source
 
@@ -35,7 +41,7 @@ if you want to just directly run the executable, run:
 
 see below for explanations for available options
 
-## usage
+## Usage
 
 run the program with the following options (the default zig install directory is `./zig-out/bin`):
    ```
