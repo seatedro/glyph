@@ -166,14 +166,13 @@ pub fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !co
             .channels = 3,
         };
 
-        // Resize the RGB image using our custom resizer
         const result = try rescale.resizeImage(
             core.Image,
             allocator,
             rgb_img,
             img_w,
             img_h,
-            rescale.FilterType.Mitchell,
+            rescale.FilterType.Lanczos3,
         );
 
         // Free the temporary RGB buffer
@@ -182,8 +181,14 @@ pub fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !co
         return result;
     }
 
-    // Use our custom resizing implementation with Mitchell filter
-    return rescale.resizeImage(core.Image, allocator, img, img_w, img_h, rescale.FilterType.Mitchell);
+    return rescale.resizeImage(
+        core.Image,
+        allocator,
+        img,
+        img_w,
+        img_h,
+        rescale.FilterType.Lanczos3,
+    );
 }
 
 pub fn generateAsciiTxt(

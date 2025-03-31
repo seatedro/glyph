@@ -1,6 +1,7 @@
 const std = @import("std");
 pub const bitmap = @import("bitmap.zig");
 pub const stb = @import("stb");
+const rescale = @import("libglyphrescale");
 
 pub const OutputType = enum {
     Stdout,
@@ -130,16 +131,20 @@ pub fn rgbToGrayScale(allocator: std.mem.Allocator, img: Image) ![]u8 {
     return grayscale_img;
 }
 
-const rescale = @import("libglyphrescale");
-
 pub fn resizeImage(allocator: std.mem.Allocator, img: Image, new_width: usize, new_height: usize) !Image {
     // Safety checks
     if (img.width == 0 or img.height == 0 or new_width == 0 or new_height == 0) {
         return error.InvalidDimensions;
     }
 
-    // Use our custom resizing implementation with Mitchell filter
-    return rescale.resizeImage(Image, allocator, img, new_width, new_height, rescale.FilterType.Mitchell);
+    return rescale.resizeImage(
+        Image,
+        allocator,
+        img,
+        new_width,
+        new_height,
+        rescale.FilterType.Lanczos3,
+    );
 }
 
 pub fn autoBrightnessContrast(
