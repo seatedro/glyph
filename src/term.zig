@@ -297,18 +297,18 @@ pub fn getTermSize(tty: std.posix.fd_t) !TermSize {
         },
         else => {
             var winsize = std.c.winsize{
-                .ws_col = 0,
-                .ws_row = 0,
-                .ws_xpixel = 0,
-                .ws_ypixel = 0,
+                .col = 0,
+                .row = 0,
+                .xpixel = 0,
+                .ypixel = 0,
             };
             const ret_val = std.c.ioctl(tty, TIOCGWINSZ, @intFromPtr(&winsize));
             const err = std.posix.errno(ret_val);
 
             if (ret_val >= 0) {
                 return .{
-                    .h = winsize.ws_row,
-                    .w = winsize.ws_col,
+                    .h = winsize.row,
+                    .w = winsize.col,
                 };
             } else {
                 return std.posix.unexpectedErrno(err);

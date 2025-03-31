@@ -1,11 +1,11 @@
 .{
-    .name = "glyph",
+    .name = .glyph,
     .version = "1.0.11",
-    .minimum_zig_version = "0.12.0",
+    .minimum_zig_version = "0.14.0",
     .dependencies = .{
         .clap = .{
-            .url = "git+https://github.com/Hejsil/zig-clap#0.9.1",
-            .hash = "122062d301a203d003547b414237229b09a7980095061697349f8bef41be9c30266b",
+            .url = "https://github.com/Hejsil/zig-clap/archive/refs/tags/0.10.0.tar.gz",
+            .hash = "clap-0.10.0-oBajB434AQBDh-Ei3YtoKIRxZacVPF1iSwp3IX_ZB8f0",
         },
         .stb = .{
             .url = "git+https://github.com/nothings/stb.git?ref=master#f75e8d1cad7d90d72ef7a4661f1b994ef78b4e31",
@@ -15,4 +15,5 @@
     .paths = .{
         "",
     },
+    .fingerprint = 0xabb6d7b897c46453,
 }

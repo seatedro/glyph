@@ -3,6 +3,13 @@ const Build = std.Build;
 const Module = Build.Module;
 const Version = std.SemanticVersion;
 
+fn getEnvOrDefault(b: *std.Build, name: []const u8, default_value: []const u8) []const u8 {
+    const v = std.process.getEnvVarOwned(b.allocator, name) catch {
+        return default_value;
+    };
+    return v;
+}
+
 const BuildOptions = struct {
     libglyph: *Module,
     stb: *Module,
@@ -33,7 +40,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    linkFfmpeg(av_module);
+    linkFfmpeg(b, target, av_module);
 
     const rescale_module = b.addModule("libglyphrescale", .{
         .root_source_file = b.path("src/rescale.zig"),
@@ -157,12 +164,25 @@ fn setupTest(
     return unit_test;
 }
 
-fn linkFfmpeg(lib: *Module) void {
-    lib.linkSystemLibrary("libavformat", .{ .use_pkg_config = .force });
-    lib.linkSystemLibrary("libavcodec", .{ .use_pkg_config = .force });
-    lib.linkSystemLibrary("libavutil", .{ .use_pkg_config = .force });
-    lib.linkSystemLibrary("libswscale", .{ .use_pkg_config = .force });
-    lib.linkSystemLibrary("libswresample", .{ .use_pkg_config = .force });
+fn linkFfmpeg(b: *std.Build, target: std.Build.ResolvedTarget, lib: *Module) void {
+    if (target.result.os.tag == .windows) {
+        const ffmpeg_include_path = getEnvOrDefault(b, "INCLUDE", "C:/ProgramData/chocolatey/lib/ffmpeg-shared/tools/ffmpeg-7.1-full_build-shared/include");
+        const ffmpeg_lib_path = getEnvOrDefault(b, "LIB", "C:/ProgramData/chocolatey/lib/ffmpeg-shared/tools/ffmpeg-7.1-full_build-shared/lib");
+
+        lib.addLibraryPath(.{ .cwd_relative = ffmpeg_lib_path });
+        lib.addIncludePath(.{ .cwd_relative = ffmpeg_include_path });
+        lib.linkSystemLibrary("avformat", .{});
+        lib.linkSystemLibrary("avcodec", .{});
+        lib.linkSystemLibrary("avutil", .{});
+        lib.linkSystemLibrary("swscale", .{});
+        lib.linkSystemLibrary("swresample", .{});
+    } else {
+        lib.linkSystemLibrary("libavformat", .{ .use_pkg_config = .force });
+        lib.linkSystemLibrary("libavcodec", .{ .use_pkg_config = .force });
+        lib.linkSystemLibrary("libavutil", .{ .use_pkg_config = .force });
+        lib.linkSystemLibrary("libswscale", .{ .use_pkg_config = .force });
+        lib.linkSystemLibrary("libswresample", .{ .use_pkg_config = .force });
+    }
 }
 
 fn runZig(

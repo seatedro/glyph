@@ -83,15 +83,15 @@ fn parseArgs(allocator: std.mem.Allocator) !core.CoreParams {
     var ffmpeg_options = std.StringHashMap([]const u8).init(allocator);
     errdefer ffmpeg_options.deinit();
     var pos: usize = 0;
-    while (pos < res.positionals.len) : (pos += 2) {
+    while (pos < res.positionals[0].len) : (pos += 2) {
         if (output_type != core.OutputType.Video) {
             std.debug.print("Warning: You have passed options not meant for this input/output type, they will be ignored.\n", .{});
             break;
         }
-        const positional = res.positionals[pos];
+        const positional = res.positionals[0][pos];
         if (std.mem.startsWith(u8, positional, "-")) {
             const key = positional[1..];
-            const val = if (pos + 1 < res.positionals.len) res.positionals[pos + 1] else return error.ValueNotFound;
+            const val = if (pos + 1 < res.positionals[0].len) res.positionals[0][pos + 1] else return error.ValueNotFound;
             try ffmpeg_options.put(key, val);
         }
     }
