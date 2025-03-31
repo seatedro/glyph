@@ -130,40 +130,16 @@ pub fn rgbToGrayScale(allocator: std.mem.Allocator, img: Image) ![]u8 {
     return grayscale_img;
 }
 
+const rescale = @import("libglyphrescale");
+
 pub fn resizeImage(allocator: std.mem.Allocator, img: Image, new_width: usize, new_height: usize) !Image {
     // Safety checks
     if (img.width == 0 or img.height == 0 or new_width == 0 or new_height == 0) {
         return error.InvalidDimensions;
     }
 
-    const total_pixels = new_width * new_height;
-    const buffer_size = total_pixels * img.channels;
-
-    const scaled_data = try allocator.alloc(u8, buffer_size);
-    errdefer allocator.free(scaled_data);
-
-    const result = stb.stbir_resize_uint8_linear(
-        img.data.ptr,
-        @intCast(img.width),
-        @intCast(img.height),
-        0,
-        scaled_data.ptr,
-        @intCast(new_width),
-        @intCast(new_height),
-        0,
-        @intCast(img.channels),
-    );
-
-    if (result == 0) {
-        return error.ImageResizeFailed;
-    }
-
-    return Image{
-        .data = scaled_data,
-        .width = new_width,
-        .height = new_height,
-        .channels = img.channels,
-    };
+    // Use our custom resizing implementation with Mitchell filter
+    return rescale.resizeImage(Image, allocator, img, new_width, new_height, rescale.FilterType.Mitchell);
 }
 
 pub fn autoBrightnessContrast(

@@ -3,6 +3,7 @@ const stb = @import("stb");
 const core = @import("libglyph");
 const bitmap = core.bitmap;
 const term = @import("libglyphterm");
+const rescale = @import("libglyphrescale");
 
 // -----------------------
 // IMAGE PROCESSING FUNCTIONS
@@ -143,38 +144,46 @@ pub fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !co
     img_w = @max(img_w, 1);
     img_h = @max(img_h, 1);
 
-    const total_pixels = img_w * img_h;
-    const buffer_size = total_pixels * (if (img.channels == 4) @as(usize, 3) else img.channels);
+    // If image has 4 channels (RGBA), we need to convert to 3 channels (RGB)
+    if (img.channels == 4) {
+        const total_pixels = img.width * img.height;
+        var rgb_data = try allocator.alloc(u8, total_pixels * 3);
+        errdefer allocator.free(rgb_data);
 
-    const scaled_data = try allocator.alloc(u8, buffer_size);
-    errdefer allocator.free(scaled_data);
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < total_pixels * 4) : (i += 4) {
+            rgb_data[j] = img.data[i]; // R
+            rgb_data[j + 1] = img.data[i + 1]; // G
+            rgb_data[j + 2] = img.data[i + 2]; // B
+            j += 3;
+        }
 
-    const scaled_img = stb.stbir_resize_uint8_linear(
-        img.data.ptr,
-        @intCast(img.width),
-        @intCast(img.height),
-        0,
-        0,
-        @intCast(img_w),
-        @intCast(img_h),
-        0,
-        @intCast(img.channels),
-    );
-    if (scaled_img == null) {
-        std.debug.print("Error downscaling image\n", .{});
-        return error.ImageScaleFailed;
+        const rgb_img = core.Image{
+            .data = rgb_data,
+            .width = img.width,
+            .height = img.height,
+            .channels = 3,
+        };
+
+        // Resize the RGB image using our custom resizer
+        const result = try rescale.resizeImage(
+            core.Image,
+            allocator,
+            rgb_img,
+            img_w,
+            img_h,
+            rescale.FilterType.Mitchell,
+        );
+
+        // Free the temporary RGB buffer
+        allocator.free(rgb_data);
+
+        return result;
     }
 
-    defer stb.stbi_image_free(scaled_img);
-
-    @memcpy(scaled_data, scaled_img[0..buffer_size]);
-
-    return core.Image{
-        .data = scaled_data,
-        .width = img_w,
-        .height = img_h,
-        .channels = img.channels,
-    };
+    // Use our custom resizing implementation with Mitchell filter
+    return rescale.resizeImage(core.Image, allocator, img, img_w, img_h, rescale.FilterType.Mitchell);
 }
 
 pub fn generateAsciiTxt(
