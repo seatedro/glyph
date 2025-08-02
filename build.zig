@@ -18,11 +18,13 @@ const BuildOptions = struct {
     video: *Module,
     img: *Module,
     version: Version,
+    av_root: []const u8,
 };
 
 pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Omit debug information") orelse false;
+    const av_root = b.option([]const u8, "av_root", "Path to ffmpeg root") orelse "C:/ProgramData/chocolatey/lib/ffmpeg-shared/tools/ffmpeg-7.1-full_build-shared";
     const target = b.standardTargetOptions(.{});
     const dep_stb = b.dependency("stb", .{});
 
@@ -40,7 +42,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    linkFfmpeg(b, target, av_module);
+    linkFfmpeg(b, target, av_module, av_root);
     const libglyph = b.addModule("libglyph", .{
         .root_source_file = b.path("src/core.zig"),
         .target = target,
@@ -87,6 +89,7 @@ pub fn build(b: *std.Build) !void {
         .libav = av_module,
         .video = video_module,
         .version = version,
+        .av_root = av_root,
     };
 
     try runZig(
@@ -153,10 +156,42 @@ fn setupTest(
     return unit_test;
 }
 
-fn linkFfmpeg(b: *std.Build, target: std.Build.ResolvedTarget, lib: *Module) void {
+fn copyDlls(b: *std.Build, target: std.Build.ResolvedTarget, av_root: []const u8) void {
+    if (target.result.os.tag != .windows) return;
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const ffmpeg_bin_path = std.fmt.bufPrint(&path_buf, "{s}/bin", .{av_root}) catch |err| {
+        std.debug.print("Failed to format ffmpeg bin path: {any}\n", .{err});
+        return;
+    };
+
+    // We can't walk the directory due to permissions with winget packages.
+    // Instead, we'll copy the DLLs we know we need by name.
+    // These names are for FFmpeg 7.x.
+    const dlls = [_][]const u8{
+        "avcodec-61.dll",
+        "avformat-61.dll",
+        "avutil-59.dll",
+        "swresample-5.dll",
+        "swscale-8.dll",
+    };
+
+    for (dlls) |dll_name| {
+        var dll_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const dll_path = std.fmt.bufPrint(&dll_path_buf, "{s}/{s}", .{ ffmpeg_bin_path, dll_name }) catch |err| {
+            std.debug.print("Failed to format src path: {any}\n", .{err});
+            return;
+        };
+        b.getInstallStep().dependOn(&b.addInstallBinFile(.{ .cwd_relative = dll_path }, dll_name).step);
+    }
+}
+
+fn linkFfmpeg(b: *std.Build, target: std.Build.ResolvedTarget, lib: *Module, av_root: []const u8) void {
     if (target.result.os.tag == .windows) {
-        const ffmpeg_include_path = getEnvOrDefault(b, "INCLUDE", "C:/ProgramData/chocolatey/lib/ffmpeg-shared/tools/ffmpeg-7.1-full_build-shared/include");
-        const ffmpeg_lib_path = getEnvOrDefault(b, "LIB", "C:/ProgramData/chocolatey/lib/ffmpeg-shared/tools/ffmpeg-7.1-full_build-shared/lib");
+        const ffmpeg_include_path = std.fs.path.join(b.allocator, &.{ av_root, "include" }) catch unreachable;
+        const ffmpeg_lib_path = std.fs.path.join(b.allocator, &.{ av_root, "lib" }) catch unreachable;
+        defer b.allocator.free(ffmpeg_include_path);
+        defer b.allocator.free(ffmpeg_lib_path);
 
         lib.addLibraryPath(.{ .cwd_relative = ffmpeg_lib_path });
         lib.addIncludePath(.{ .cwd_relative = ffmpeg_include_path });
@@ -181,6 +216,8 @@ fn runZig(
     optimize: std.builtin.OptimizeMode,
     strip: bool,
 ) !void {
+    copyDlls(b, target, self.av_root);
+
     const exe = try setupExecutable(
         self,
         b,

@@ -26,3 +26,5 @@ test_output/
 # releases to make it less annoying to work with multiple branches.
 zig-cache/
 release_assets/
+
+raddbg*
