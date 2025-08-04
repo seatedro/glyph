@@ -58,6 +58,7 @@ pub const CoreParams = struct {
     dither: ?DitherType,
     bg_color: ?[3]u8,
     fg_color: ?[3]u8,
+    transparent_bg: bool,
 
     pub fn deinit(self: *CoreParams) void {
         var it = self.ffmpeg_options.iterator();
@@ -505,11 +506,12 @@ fn convertToAscii(
     color: [3]u8,
     block_size: u8,
     color_enabled: bool,
+    channels: u8,
     args: CoreParams,
 ) !void {
     const bm = &(try bitmap.getCharSet(ascii_char));
     const block_w = @min(block_size, w - x);
-    const block_h = @min(block_size, img.len / (w * 3) - y);
+    const block_h = @min(block_size, h - y);
 
     // Define new colors
     const background_color = if (args.bg_color != null) args.bg_color.? else [3]u8{ 21, 9, 27 }; // Blackcurrant
@@ -523,7 +525,7 @@ fn convertToAscii(
             const img_y = y + dy;
 
             if (img_x < w and img_y < h) {
-                const idx = (img_y * w + img_x) * 3;
+                const idx = (img_y * w + img_x) * channels;
                 const shift: u3 = @intCast(7 - dx);
                 const bit: u8 = @as(u8, 1) << shift;
                 if ((bm[dy] & bit) != 0) {
@@ -537,17 +539,13 @@ fn convertToAscii(
                         img[idx + 1] = text_color[1];
                         img[idx + 2] = text_color[2];
                     }
-                } else {
-                    // not a character pixel: set to black
-                    if (color_enabled) {
-                        img[idx] = 0;
-                        img[idx + 1] = 0;
-                        img[idx + 2] = 0;
-                    } else {
-                        img[idx] = background_color[0];
-                        img[idx + 1] = background_color[1];
-                        img[idx + 2] = background_color[2];
+                    if (channels == 4) {
+                        img[idx + 3] = 255;
                     }
+                } else if (!color_enabled) {
+                    img[idx] = background_color[0];
+                    img[idx + 1] = background_color[1];
+                    img[idx + 2] = background_color[2];
                 }
             }
         }
@@ -582,7 +580,8 @@ pub fn generateAsciiArt(
     if (curr_ditherr) |buf| @memset(buf, 0);
     if (next_ditherr) |buf| @memset(buf, 0);
 
-    const ascii_img = try allocator.alloc(u8, out_w * out_h * 3);
+    const channels: u8 = if (args.transparent_bg) 4 else 3;
+    const ascii_img = try allocator.alloc(u8, out_w * out_h * channels);
     @memset(ascii_img, 0);
 
     var y: usize = 0;
@@ -621,7 +620,7 @@ pub fn generateAsciiArt(
             const ascii_char = selectAsciiChar(block_info, args);
             const avg_color = calculateAverageColor(block_info, args);
 
-            try convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, args.block_size, args.color, args);
+            try convertToAscii(ascii_img, out_w, out_h, x, y, ascii_char, avg_color, args.block_size, args.color, channels, args);
         }
 
         if (curr_ditherr != null and next_ditherr != null) {

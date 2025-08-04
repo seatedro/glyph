@@ -111,8 +111,9 @@ pub fn main() !void {
         \\    --stretched                Resizes media to fit terminal window
         \\-f, --frame_rate <f32>         Target frame rate for video output (default: matches input fps)
         \\-d, --dither <str>             Dithering, supported values: "floydstein" (default: "floydstein")
-        \\    --fg <str>                 Enter a hex value like "#ffffff" for the foreground color (default: "#d36a6f")
-        \\    --bg <str>                 Enter a hex value like "#000000" for the background color (default: "#15091b")
+        \\    --fg <str>                 Enter a 6-digit hex value like "#ffffff" for the foreground color (default: "#d36a6f")
+        \\    --bg <str>                 Enter a 6-digit hex value like "#000000" for the background color (default: "#15091b")
+        \\    --transparent_bg           Set the background to transparent
         \\<str>...
     );
 
@@ -232,6 +233,7 @@ pub fn main() !void {
         .dither = dither,
         .fg_color = fg_color,
         .bg_color = bg_color,
+        .transparent_bg = res.args.transparent_bg != 0,
     };
 
     if (video.isVideoFile(args.input)) {
