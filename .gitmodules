@@ -1,0 +1,3 @@
+[submodule "vendor/ffmpeg"]
+	path = vendor/ffmpeg
+	url = git@github.com:seatedro/ffmpeg.git
