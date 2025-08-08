@@ -2,7 +2,8 @@ const std = @import("std");
 pub const core = @import("libglyph");
 pub const image = @import("libglyphimg");
 pub const term = @import("libglyphterm");
-pub const video = @import("libglyphav");
+const build_options = @import("build_options");
+pub const video = if (build_options.av) @import("libglyphav") else struct {};
 const stb = core.stb;
 
 test "loadImage - png" {

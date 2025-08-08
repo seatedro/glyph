@@ -14,11 +14,12 @@ const BuildOptions = struct {
     libglyph: *Module,
     stb: *Module,
     term: *Module,
-    libav: *Module,
-    video: *Module,
+    libav: ?*Module,
+    video: ?*Module,
     img: *Module,
     version: Version,
     av_root: []const u8,
+    av_enabled: bool,
 };
 
 pub fn build(b: *std.Build) !void {
@@ -27,6 +28,7 @@ pub fn build(b: *std.Build) !void {
     const av_root = b.option([]const u8, "av_root", "Path to ffmpeg root") orelse "C:/ProgramData/chocolatey/lib/ffmpeg-shared/tools/ffmpeg-7.1-full_build-shared";
     const target = b.standardTargetOptions(.{});
     const dep_stb = b.dependency("stb", .{});
+    const av_enabled = b.option(bool, "av", "Enable FFmpeg/AV support") orelse false;
 
     const version = try Version.parse("1.0.11");
 
@@ -37,12 +39,18 @@ pub fn build(b: *std.Build) !void {
     });
     stb_module.addIncludePath(dep_stb.path(""));
     stb_module.addCSourceFile(.{ .file = b.path("vendor/stb.c") });
-    const av_module = b.addModule("av", .{
-        .root_source_file = b.path("vendor/av.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    linkFfmpeg(b, target, av_module, av_root);
+
+    var av_module: ?*Module = null;
+    if (av_enabled) {
+        const avm = b.addModule("av", .{
+            .root_source_file = b.path("vendor/av.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        linkFfmpeg(b, target, avm, av_root);
+        av_module = avm;
+    }
+
     const libglyph = b.addModule("libglyph", .{
         .root_source_file = b.path("src/core.zig"),
         .target = target,
@@ -60,26 +68,33 @@ pub fn build(b: *std.Build) !void {
             .{ .name = "libglyph", .module = libglyph },
         },
     });
-    const video_module = b.addModule("libglyphav", .{
-        .root_source_file = b.path("src/video.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "stb", .module = stb_module },
-            .{ .name = "av", .module = av_module },
-            .{ .name = "libglyph", .module = libglyph },
-            .{ .name = "libglyphterm", .module = term_module },
-        },
-    });
+
+    var video_module: ?*Module = null;
+    if (av_enabled) {
+        video_module = b.addModule("libglyphav", .{
+            .root_source_file = b.path("src/video.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "stb", .module = stb_module },
+                .{ .name = "av", .module = av_module.? },
+                .{ .name = "libglyph", .module = libglyph },
+                .{ .name = "libglyphterm", .module = term_module },
+            },
+        });
+    }
+
     const image_module = b.addModule("libglyphimg", .{
         .root_source_file = b.path("src/image.zig"),
         .imports = &.{
             .{ .name = "stb", .module = stb_module },
-            .{ .name = "av", .module = av_module },
             .{ .name = "libglyph", .module = libglyph },
             .{ .name = "libglyphterm", .module = term_module },
         },
     });
+    if (av_enabled) {
+        image_module.addImport("av", av_module.?);
+    }
 
     const buildOpts = &BuildOptions{
         .libglyph = libglyph,
@@ -90,6 +105,7 @@ pub fn build(b: *std.Build) !void {
         .video = video_module,
         .version = version,
         .av_root = av_root,
+        .av_enabled = av_enabled,
     };
 
     try runZig(
@@ -124,7 +140,9 @@ fn setupExecutable(
     exe.root_module.addImport("clap", clap.module("clap"));
     exe.root_module.addImport("libglyph", self.libglyph);
     exe.root_module.addImport("libglyphimg", self.img);
-    exe.root_module.addImport("libglyphav", self.video);
+    if (self.av_enabled) {
+        exe.root_module.addImport("libglyphav", self.video.?);
+    }
     exe.root_module.addImport("libglyphterm", self.term);
 
     return exe;
@@ -150,7 +168,9 @@ fn setupTest(
     unit_test.root_module.addImport("clap", clap.module("clap"));
     unit_test.root_module.addImport("libglyph", self.libglyph);
     unit_test.root_module.addImport("libglyphimg", self.img);
-    unit_test.root_module.addImport("libglyphav", self.video);
+    if (self.av_enabled) {
+        unit_test.root_module.addImport("libglyphav", self.video.?);
+    }
     unit_test.root_module.addImport("libglyphterm", self.term);
 
     return unit_test;
@@ -216,7 +236,7 @@ fn runZig(
     optimize: std.builtin.OptimizeMode,
     strip: bool,
 ) !void {
-    copyDlls(b, target, self.av_root);
+    if (self.av_enabled) copyDlls(b, target, self.av_root);
 
     const exe = try setupExecutable(
         self,
@@ -266,6 +286,7 @@ fn buildOptionsModule(self: *const BuildOptions, b: *std.Build) *Module {
     var opts = b.addOptions();
 
     opts.addOption(std.SemanticVersion, "version", self.version);
+    opts.addOption(bool, "av", self.av_enabled);
 
     const mod = opts.createModule();
     return mod;

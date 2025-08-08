@@ -96,26 +96,6 @@ pub fn FrameBuffer(comptime T: type) type {
 // VIDEO PROCESSING FUNCTIONS
 // -----------------------
 
-pub fn isVideoFile(file_path: []const u8) bool {
-    const extension = std.fs.path.extension(file_path);
-    if (mime.extension_map.get(extension)) |mime_type| {
-        return switch (mime_type) {
-            .@"video/3gpp",
-            .@"video/3gpp2",
-            .@"video/mp2t",
-            .@"video/mp4",
-            .@"video/mpeg",
-            .@"video/ogg",
-            .@"video/quicktime",
-            .@"video/webm",
-            .@"video/x-msvideo",
-            => true,
-            else => false,
-        };
-    }
-    return false;
-}
-
 fn openInputVideo(path: []const u8) !*av.AVFormatContext {
     var fmt_ctx: ?*av.AVFormatContext = null;
     if (av.avformat_open_input(

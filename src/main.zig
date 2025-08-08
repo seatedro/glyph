@@ -3,12 +3,21 @@ const builtin = @import("builtin");
 const clap = @import("clap");
 const core = @import("libglyph");
 const image = @import("libglyphimg");
-const video = @import("libglyphav");
-const term = @import("libglyphterm");
-const bitmap = core.bitmap;
 const build_options = @import("build_options");
+const term = @import("libglyphterm");
+const mime = @import("mime.zig");
+const bitmap = core.bitmap;
 const version = build_options.version;
 const version_string = std.fmt.comptimePrint("{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
+
+const video = if (build_options.av) @import("libglyphav") else struct {
+    pub fn isVideoFile(_: []const u8) bool {
+        return false;
+    }
+    pub fn processVideo(_: std.mem.Allocator, _: core.CoreParams) !void {
+        return error.AVDisabled;
+    }
+};
 
 const default_block = " .:coPO?@█";
 const default_ascii = " .:-=+*%@#";
@@ -75,6 +84,26 @@ fn hexToRgb(hex: []const u8) ![3]u8 {
     const g = try std.fmt.parseInt(u8, hex[3..5], 16);
     const b = try std.fmt.parseInt(u8, hex[5..7], 16);
     return .{ r, g, b };
+}
+
+pub fn isVideoFile(file_path: []const u8) bool {
+    const extension = std.fs.path.extension(file_path);
+    if (mime.extension_map.get(extension)) |mime_type| {
+        return switch (mime_type) {
+            .@"video/3gpp",
+            .@"video/3gpp2",
+            .@"video/mp2t",
+            .@"video/mp4",
+            .@"video/mpeg",
+            .@"video/ogg",
+            .@"video/quicktime",
+            .@"video/webm",
+            .@"video/x-msvideo",
+            => true,
+            else => false,
+        };
+    }
+    return false;
 }
 
 // -----------------------
@@ -145,12 +174,17 @@ pub fn main() !void {
         const ext = std.fs.path.extension(op);
         if (std.mem.eql(u8, ext, ".txt")) {
             break :blk core.OutputType.Text;
-        } else if (video.isVideoFile(op)) {
+        } else if (isVideoFile(op)) {
             break :blk core.OutputType.Video;
         } else {
             break :blk core.OutputType.Image;
         }
     } else core.OutputType.Stdout;
+
+    if (!build_options.av and output_type == core.OutputType.Video) {
+        std.debug.print("Error: Video output requested but AV support is disabled. Rebuild with -Dav.\n", .{});
+        std.process.exit(2);
+    }
 
     var ffmpeg_options = std.StringHashMap([]const u8).init(allocator);
     errdefer ffmpeg_options.deinit();
@@ -234,7 +268,13 @@ pub fn main() !void {
         .bg_color = bg_color,
     };
 
-    if (video.isVideoFile(args.input)) {
+    const input_is_video = isVideoFile(args.input);
+    if (input_is_video and !build_options.av) {
+        std.debug.print("Error: Video input detected but AV support is disabled. Rebuild with -Dav.\n", .{});
+        std.process.exit(2);
+    }
+
+    if (input_is_video) {
         try video.processVideo(allocator, args);
     } else {
         try image.processImage(allocator, args);
