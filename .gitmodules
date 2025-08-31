@@ -1,3 +1,8 @@
 [submodule "vendor/ffmpeg"]
 	path = vendor/ffmpeg
 	url = git@github.com:seatedro/ffmpeg.git
+	branch = main
+[submodule "vendor/nv-codec-headers"]
+	path = vendor/nv-codec-headers
+	url = https://github.com/seatedro/nv-codec-headers.git
+	branch = master
