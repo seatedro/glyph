@@ -11,6 +11,11 @@
             .url = "git+https://github.com/nothings/stb.git?ref=master#f75e8d1cad7d90d72ef7a4661f1b994ef78b4e31",
             .hash = "1220c4fe5a4c4ebec402f5cdef08bc264b56fb07f259107d2b01ba8d416d88624b50",
         },
+        .ffmpeg = .{
+            .url = "vendor/ffmpeg",
+            .hash = "ffmpeg-7.0.1-6-zT7QA_15BQRj44priIFmB79WjoxhDM2rJUFspAKMYIvu",
+            .lazy = true,
+        },
     },
     .paths = .{
         "",
