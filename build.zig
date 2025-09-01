@@ -99,6 +99,22 @@ pub fn build(b: *std.Build) !void {
         optimize,
         strip,
     );
+
+    const rain_step = b.step("rain", "Build the rain demo executable");
+    const rain = b.addExecutable(.{
+        .name = "rain",
+        .root_source_file = b.path("bin/rain.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = strip,
+        .link_libc = true,
+    });
+    rain.root_module.addImport("libglyphterm", buildOpts.term);
+    const clap_dep = b.dependency("clap", .{});
+    rain.root_module.addImport("clap", clap_dep.module("clap"));
+    b.installArtifact(rain);
+    rain_step.dependOn(&rain.step);
+    rain_step.dependOn(&b.addInstallArtifact(rain, .{}).step);
 }
 
 fn setupExecutable(
