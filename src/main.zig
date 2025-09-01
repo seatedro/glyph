@@ -14,7 +14,79 @@ const default_block = " .:coPO?@█";
 const default_ascii = " .:-=+*%@#";
 const full_characters = " .-:=+iltIcsv1x%7aejorzfnuCJT3*69LYpqy25SbdgFGOVXkPhmw48AQDEHKUZR@B#NW0M";
 
-fn parseArgs(allocator: std.mem.Allocator) !core.CoreParams {
+fn getDefaultChars(symbols: ?[]const u8) []const u8 {
+    const symbol_type = if (symbols) |s|
+        if (std.mem.eql(u8, s, "ascii")) core.SymbolType.Ascii else core.SymbolType.Block
+    else
+        core.SymbolType.Ascii;
+    return switch (symbol_type) {
+        .Ascii => default_ascii,
+        .Block => default_block,
+    };
+}
+
+fn sortCharsBySize(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+    const CharInfo = struct {
+        char: []const u8,
+        size: usize,
+    };
+
+    var char_infos = std.ArrayList(CharInfo).init(allocator);
+    defer char_infos.deinit();
+
+    var it = std.unicode.Utf8Iterator{ .bytes = input, .i = 0 };
+    while (it.nextCodepoint()) |codepoint| {
+        const len = std.unicode.utf8CodepointSequenceLength(codepoint) catch continue;
+        const char_start = it.i - len;
+        const char = input[char_start..it.i];
+
+        const bm = bitmap.getCharSet(char) catch continue;
+        var size: usize = 0;
+
+        for (bm) |row| {
+            size += @popCount(row);
+        }
+
+        if (size == 0 and !std.mem.eql(u8, char, " ")) continue; // Skip zero-size characters except space
+
+        try char_infos.append(.{ .char = char, .size = size });
+    }
+
+    // Sort characters by size
+    std.mem.sort(CharInfo, char_infos.items, {}, struct {
+        fn lessThan(_: void, a: CharInfo, b: CharInfo) bool {
+            return a.size < b.size;
+        }
+    }.lessThan);
+
+    // Create the sorted string
+    var result = std.ArrayList(u8).init(allocator);
+    for (char_infos.items) |char_info| {
+        try result.appendSlice(char_info.char);
+    }
+
+    return result.toOwnedSlice();
+}
+
+fn hexToRgb(hex: []const u8) ![3]u8 {
+    if (hex[0] != '#') return error.InvalidHexString;
+    if (hex.len != 7) return error.InvalidHexString;
+    const r = try std.fmt.parseInt(u8, hex[1..3], 16);
+    const g = try std.fmt.parseInt(u8, hex[3..5], 16);
+    const b = try std.fmt.parseInt(u8, hex[5..7], 16);
+    return .{ r, g, b };
+}
+
+// -----------------------
+// MAIN ENTRYPOINT AND HELPER FUNCTIONS
+// -----------------------
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
     const params = comptime clap.parseParamsComptime(
         \\-h, --help                     Print this help message and exit
         \\-v, --version                  Prints the version and exit
@@ -45,7 +117,7 @@ fn parseArgs(allocator: std.mem.Allocator) !core.CoreParams {
     );
 
     var diag = clap.Diagnostic{};
-    var res = clap.parse(clap.Help, &params, clap.parsers.default, .{
+    const res = clap.parse(clap.Help, &params, clap.parsers.default, .{
         .allocator = allocator,
         .diagnostic = &diag,
     }) catch |err| {
@@ -136,7 +208,7 @@ fn parseArgs(allocator: std.mem.Allocator) !core.CoreParams {
         } else break :blk null;
     };
 
-    return core.CoreParams{
+    const args = core.CoreParams{
         .input = res.args.input.?,
         .output_type = output_type,
         .output = res.args.output,
@@ -161,82 +233,6 @@ fn parseArgs(allocator: std.mem.Allocator) !core.CoreParams {
         .fg_color = fg_color,
         .bg_color = bg_color,
     };
-}
-
-fn getDefaultChars(symbols: ?[]const u8) []const u8 {
-    const symbol_type = if (symbols) |s|
-        if (std.mem.eql(u8, s, "ascii")) core.SymbolType.Ascii else core.SymbolType.Block
-    else
-        core.SymbolType.Ascii;
-    return switch (symbol_type) {
-        .Ascii => default_ascii,
-        .Block => default_block,
-    };
-}
-
-fn sortCharsBySize(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
-    const CharInfo = struct {
-        char: []const u8,
-        size: usize,
-    };
-
-    var char_infos = std.ArrayList(CharInfo).init(allocator);
-    defer char_infos.deinit();
-
-    var it = std.unicode.Utf8Iterator{ .bytes = input, .i = 0 };
-    while (it.nextCodepoint()) |codepoint| {
-        const len = std.unicode.utf8CodepointSequenceLength(codepoint) catch continue;
-        const char_start = it.i - len;
-        const char = input[char_start..it.i];
-
-        const bm = bitmap.getCharSet(char) catch continue;
-        var size: usize = 0;
-
-        for (bm) |row| {
-            size += @popCount(row);
-        }
-
-        if (size == 0 and !std.mem.eql(u8, char, " ")) continue; // Skip zero-size characters except space
-
-        try char_infos.append(.{ .char = char, .size = size });
-    }
-
-    // Sort characters by size
-    std.mem.sort(CharInfo, char_infos.items, {}, struct {
-        fn lessThan(_: void, a: CharInfo, b: CharInfo) bool {
-            return a.size < b.size;
-        }
-    }.lessThan);
-
-    // Create the sorted string
-    var result = std.ArrayList(u8).init(allocator);
-    for (char_infos.items) |char_info| {
-        try result.appendSlice(char_info.char);
-    }
-
-    return result.toOwnedSlice();
-}
-
-fn hexToRgb(hex: []const u8) ![3]u8 {
-    if (hex[0] != '#') return error.InvalidHexString;
-    if (hex.len != 7) return error.InvalidHexString;
-    const r = try std.fmt.parseInt(u8, hex[1..3], 16);
-    const g = try std.fmt.parseInt(u8, hex[3..5], 16);
-    const b = try std.fmt.parseInt(u8, hex[5..7], 16);
-    return .{ r, g, b };
-}
-
-// -----------------------
-// MAIN ENTRYPOINT AND HELPER FUNCTIONS
-// -----------------------
-
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    const args = try parseArgs(allocator);
 
     if (video.isVideoFile(args.input)) {
         try video.processVideo(allocator, args);
