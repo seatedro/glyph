@@ -316,22 +316,25 @@ pub fn resizeImage(
             var h = ring_buf[(scanline_h % ring_size) * new_width * img.channels ..];
             var w_idx: usize = 0;
 
-            for (0..new_width) |i| {
-                const first = wx.contrib[i].first;
-                const n = wx.contrib[i].n;
-
-                for (0..img.channels) |c| {
+            for (0..img.channels) |c| {
+                var i: usize = 0;
+                var local_w_idx: usize = w_idx;
+                while (i < new_width) : (i += 1) {
+                    const first = wx.contrib[i].first;
+                    const n = wx.contrib[i].n;
                     var val: f32 = 0;
-
-                    for (0..n) |j| {
+                    var j: usize = 0;
+                    while (j < n) : (j += 1) {
                         const src_idx = first + j;
-                        val += ftmp[src_idx * img.channels + c] * wx.weights[w_idx + j];
+                        val += ftmp[src_idx * img.channels + c] * wx.weights[local_w_idx + j];
                     }
-
                     h[i * img.channels + c] = val;
+                    local_w_idx += n;
                 }
-
-                w_idx += n;
+            }
+            // advance global weight index once per output pixel
+            for (0..new_width) |i| {
+                w_idx += wx.contrib[i].n;
             }
 
             scanline_h += 1;
@@ -343,26 +346,28 @@ pub fn resizeImage(
             const n = wy.contrib[scanline_v].n;
             var w_idx: usize = 0;
 
-            // Initialize temporary buffer with bias for integer rounding
-            for (0..new_width * img.channels) |i| {
-                ftmp[i] = 0.5; // bias for rounding
-            }
+            @memset(ftmp, 0.5);
 
             for (0..n) |j| {
                 const src_idx = (first + j) % ring_size;
                 const weight = wy.weights[w_idx + j];
-                const h = ring_buf[src_idx * new_width * img.channels ..];
-
-                for (0..new_width * img.channels) |i| {
-                    ftmp[i] += h[i] * weight;
+                const hrow = ring_buf[src_idx * new_width * img.channels ..];
+                var i: usize = 0;
+                while (i < new_width) : (i += 1) {
+                    var c: usize = 0;
+                    while (c < img.channels) : (c += 1) {
+                        const idx = i * img.channels + c;
+                        ftmp[idx] += hrow[idx] * weight;
+                    }
                 }
             }
 
-            // Write to output
-            for (0..new_width) |x| {
-                for (0..img.channels) |c| {
-                    const val = std.math.clamp(ftmp[x * img.channels + c], 0, 255);
-                    output[(scanline_v * new_width + x) * img.channels + c] = @intFromFloat(val);
+            var x_out: usize = 0;
+            while (x_out < new_width) : (x_out += 1) {
+                var c: usize = 0;
+                while (c < img.channels) : (c += 1) {
+                    const val = std.math.clamp(ftmp[x_out * img.channels + c], 0, 255);
+                    output[(scanline_v * new_width + x_out) * img.channels + c] = @intFromFloat(val);
                 }
             }
 

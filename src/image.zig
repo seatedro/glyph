@@ -19,11 +19,9 @@ pub fn downloadImage(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
     var req = try client.open(.GET, uri, .{ .server_header_buffer = &buf });
     defer req.deinit();
 
-    // Sending HTTP req headers
     try req.send();
     try req.finish();
 
-    // Wait for response
     try req.wait();
 
     if (req.response.status != .ok) {
@@ -67,13 +65,11 @@ pub fn loadImage(allocator: std.mem.Allocator, path: []const u8) !core.Image {
 
     defer stb.stbi_image_free(data);
 
-    // Make sure w, h, and chan are valid to prevent integer overflow
     if (w <= 0 or h <= 0 or chan <= 0) {
         std.debug.print("Invalid image dimensions: w={d}, h={d}, chan={d}\n", .{ w, h, chan });
         return error.InvalidImageDimensions;
     }
 
-    // Validate buffer size to prevent overflow
     const total_pixels = @as(usize, @intCast(w)) * @as(usize, @intCast(h));
     const pixel_size = @as(usize, @intCast(chan));
     const buffer_size = total_pixels * (if (chan == 4) @as(usize, 3) else pixel_size);
@@ -81,34 +77,22 @@ pub fn loadImage(allocator: std.mem.Allocator, path: []const u8) !core.Image {
     var rgb_data = try allocator.alloc(u8, buffer_size);
     errdefer allocator.free(rgb_data);
 
-    const ext = std.fs.path.extension(path);
-    if (std.mem.eql(u8, ext, ".png")) {
-        // If image has 4 channels (RGBA), strip the alpha channel
-        if (chan == 4) {
-            var i: usize = 0;
-            var j: usize = 0;
-            while (i < total_pixels * 4) : (i += 4) {
-                rgb_data[j] = data[i]; // R
-                rgb_data[j + 1] = data[i + 1]; // G
-                rgb_data[j + 2] = data[i + 2]; // B
-                j += 3;
-            }
-
-            return core.Image{
-                .data = rgb_data,
-                .width = @intCast(w),
-                .height = @intCast(h),
-                .channels = 3,
-            };
+    // If image has 4 channels (RGBA), strip the alpha channel for consistency
+    if (chan == 4) {
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < total_pixels * 4) : (i += 4) {
+            rgb_data[j] = data[i]; // R
+            rgb_data[j + 1] = data[i + 1]; // G
+            rgb_data[j + 2] = data[i + 2]; // B
+            j += 3;
         }
-
-        @memcpy(rgb_data, data[0 .. total_pixels * @as(usize, @intCast(chan))]);
 
         return core.Image{
             .data = rgb_data,
             .width = @intCast(w),
             .height = @intCast(h),
-            .channels = @intCast(chan),
+            .channels = 3,
         };
     }
 
@@ -129,7 +113,6 @@ pub fn loadAndScaleImage(allocator: std.mem.Allocator, args: core.CoreParams) !c
     };
 
     if (args.scale != 1.0 and args.scale > 0.0) {
-        // Need to free the original image data after scaling
         defer allocator.free(original_img.data);
         return scaleImage(allocator, original_img, args.scale);
     } else {
@@ -144,7 +127,6 @@ pub fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !co
     img_w = @max(img_w, 1);
     img_h = @max(img_h, 1);
 
-    // If image has 4 channels (RGBA), we need to convert to 3 channels (RGB)
     if (img.channels == 4) {
         const total_pixels = img.width * img.height;
         var rgb_data = try allocator.alloc(u8, total_pixels * 3);
@@ -237,7 +219,7 @@ fn saveOutputImage(ascii_img: []u8, img: core.Image, args: core.CoreParams) !voi
         @ptrCast(args.output.?.ptr),
         @intCast(out_w),
         @intCast(out_h),
-        @intCast(img.channels),
+        3, // ascii_img is RGB
         @ptrCast(ascii_img.ptr),
         @intCast(out_w * 3),
     );
@@ -350,5 +332,3 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
         else => {},
     }
 }
-
-// TESTS
