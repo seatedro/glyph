@@ -1,0 +1,60 @@
+name: Build Rain
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-rain:
+    name: Build Rain on ${{ matrix.os }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # arm
+          - os: macos-latest
+            arch: aarch64
+            target: aarch64-macos
+          - os: macos-13
+            arch: x86_64
+            target: x86_64-macos
+          - os: ubuntu-24.04
+            arch: aarch64
+            target: aarch64-linux
+          # x86
+          - os: ubuntu-latest
+            arch: x86_64
+            target: x86_64-linux
+          - os: windows-latest
+            arch: x86_64
+            target: x86_64-windows
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Zig
+      uses: mlugg/setup-zig@v1
+      with:
+        version: 0.14.0
+
+    - name: Build Rain
+      run: |
+        zig build rain -Doptimize=ReleaseFast -Dstrip=true
+
+    - name: Package Rain
+      shell: bash
+      run: |
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          cp zig-out/bin/rain.exe rain-${{ matrix.target }}.exe
+          echo "ARTIFACT_NAME=rain-${{ matrix.target }}.exe" >> $GITHUB_ENV
+          echo "ARTIFACT_PATH=rain-${{ matrix.target }}.exe" >> $GITHUB_ENV
+        else
+          cp zig-out/bin/rain rain-${{ matrix.target }}
+          echo "ARTIFACT_NAME=rain-${{ matrix.target }}" >> $GITHUB_ENV
+          echo "ARTIFACT_PATH=rain-${{ matrix.target }}" >> $GITHUB_ENV
+        fi
+
+    - name: Upload Rain artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: rain-${{ matrix.target }}
+        path: ${{ env.ARTIFACT_PATH }}
