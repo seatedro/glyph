@@ -919,7 +919,10 @@ fn convertFrameToAscii(allocator: std.mem.Allocator, frame: *av.AVFrame, args: c
 
     const edge_result = try core.detectEdges(allocator, adjusted_img, args.detect_edges, args.sigma1, args.sigma2);
 
-    const ascii_img = try core.generateAsciiArt(allocator, adjusted_img, edge_result, args);
+    const ascii_img = if (args.render == .Pixels)
+        try core.generatePixelDither(allocator, adjusted_img, args)
+    else
+        try core.generateAsciiArt(allocator, adjusted_img, edge_result, args);
 
     // Copy ascii art back to frame
     const out_w = (adjusted_img.width / args.block_size) * args.block_size;

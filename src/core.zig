@@ -33,7 +33,9 @@ pub const EdgeData = struct {
     direction: []f32,
 };
 
-pub const DitherType = enum { FloydSteinberg, None };
+pub const DitherType = enum { FloydSteinberg, Bayer4, Bayer8, Bayer16, None };
+
+pub const RenderType = enum { Ascii, Pixels };
 
 pub const CoreParams = struct {
     input: []const u8,
@@ -57,6 +59,8 @@ pub const CoreParams = struct {
     keep_audio: bool,
     codec: ?[]const u8,
     dither: ?DitherType,
+    render: RenderType = .Ascii,
+    dither_levels: u8 = 2,
     bg_color: ?[3]u8,
     fg_color: ?[3]u8,
 
@@ -789,14 +793,14 @@ pub fn generateAsciiArt(
                     const q = lut.quant[clamped_brightness];
                     const closest = .{ q, @as(u32, @intCast(@as(u32, clamped_brightness) - q)) };
                     switch (args.dither.?) {
-                        DitherType.FloydSteinberg => floydSteinberg(
+                        .FloydSteinberg => floydSteinberg(
                             curr_ditherr.?,
                             next_ditherr.?,
                             @as(u8, @intCast(x)) / args.block_size,
                             @as(u8, @intCast(out_w)) / args.block_size,
                             closest[1],
                         ),
-                        DitherType.None => {},
+                        .None, .Bayer4, .Bayer8, .Bayer16 => {},
                     }
                     block_info.sum_brightness = @as(u64, closest[0]) * block_info.pixel_count;
                 }
@@ -860,4 +864,225 @@ fn floydSteinberg(
         next[x - 1] += (quant_error * 3) >> 4;
     }
     next[x] += (quant_error * 5) >> 4;
+}
+
+const bayer4: [16]u8 = .{
+    0,  8,  2,  10,
+    12, 4,  14, 6,
+    3,  11, 1,  9,
+    15, 7,  13, 5,
+};
+
+const bayer8: [64]u8 = .{
+    0,  48, 12, 60, 3,  51, 15, 63,
+    32, 16, 44, 28, 35, 19, 47, 31,
+    8,  56, 4,  52, 11, 59, 7,  55,
+    40, 24, 36, 20, 43, 27, 39, 23,
+    2,  50, 14, 62, 1,  49, 13, 61,
+    34, 18, 46, 30, 33, 17, 45, 29,
+    10, 58, 6,  54, 9,  57, 5,  53,
+    42, 26, 38, 22, 41, 25, 37, 21,
+};
+
+fn bayerThreshold(x: usize, y: usize, kind: DitherType) f32 {
+    return switch (kind) {
+        .Bayer4 => blk: {
+            const n: usize = 4;
+            const v: u8 = bayer4[(y % n) * n + (x % n)];
+            break :blk @as(f32, @floatFromInt(v)) / @as(f32, @floatFromInt(n * n));
+        },
+        .Bayer8 => blk: {
+            const n: usize = 8;
+            const v: u8 = bayer8[(y % n) * n + (x % n)];
+            break :blk @as(f32, @floatFromInt(v)) / @as(f32, @floatFromInt(n * n));
+        },
+        .Bayer16 => blk: {
+            //TODO: proper 16x16 can be added later.
+            const n: usize = 8;
+            const v: u8 = bayer8[(y % n) * n + (x % n)];
+            break :blk @as(f32, @floatFromInt(v)) / 64.0;
+        },
+        else => 0.0,
+    };
+}
+
+pub fn generatePixelDither(
+    allocator: std.mem.Allocator,
+    img: Image,
+    args: CoreParams,
+) ![]u8 {
+    const out_w = img.width;
+    const out_h = img.height;
+    const out = try allocator.alloc(u8, out_w * out_h * 3);
+
+    const levels_u8: u8 = if (args.dither_levels < 2) 2 else args.dither_levels;
+    const levels_u16: u16 = levels_u8;
+    const denom_u16: u16 = if (levels_u8 <= 1) 1 else (levels_u8 - 1);
+
+    const boost_q8_8: u16 = @intFromFloat(@as(f32, args.brightness_boost) * 256.0);
+
+    var trow = try allocator.alloc(u8, out_w);
+    defer allocator.free(trow);
+
+    var r_row = try allocator.alloc(u16, out_w);
+    defer allocator.free(r_row);
+    var g_row = try allocator.alloc(u16, out_w);
+    defer allocator.free(g_row);
+    var b_row = try allocator.alloc(u16, out_w);
+    defer allocator.free(b_row);
+
+    const LANES: usize = 16; // tune per target
+
+    var y: usize = 0;
+    while (y < out_h) : (y += 1) {
+        var n: usize = 0;
+        var scale: u8 = 0;
+        var use_bayer8 = false;
+        switch (args.dither orelse .None) {
+            .Bayer4 => {
+                n = 4;
+                scale = 16;
+            },
+            .Bayer8 => {
+                n = 8;
+                scale = 4;
+            },
+            .Bayer16 => {
+                n = 8;
+                scale = 4;
+                use_bayer8 = true;
+            },
+            else => {
+                n = 0;
+            },
+        }
+        if (n == 0) {
+            @memset(trow, 0);
+        } else {
+            const ymod = y & (n - 1);
+            var xi: usize = 0;
+            var base_row: [16]u8 = undefined; // enough for 8 or 4
+            while (xi < n) : (xi += 1) {
+                const v: u8 = if (use_bayer8 or n == 8)
+                    bayer8[ymod * 8 + xi]
+                else
+                    bayer4[ymod * 4 + xi];
+                base_row[xi] = @as(u8, v * scale);
+            }
+            var xrep: usize = 0;
+            while (xrep < out_w) : (xrep += n) {
+                const take = @min(n, out_w - xrep);
+                @memcpy(trow[xrep .. xrep + take], base_row[0..take]);
+            }
+        }
+
+        var x_build: usize = 0;
+        while (x_build < out_w) : (x_build += 1) {
+            const in_idx = (y * out_w + x_build) * img.channels;
+            var r8: u16 = img.data[in_idx + 0];
+            var g8: u16 = img.data[in_idx + 1];
+            var b8: u16 = img.data[in_idx + 2];
+            if (args.invert_color) {
+                r8 = 255 - r8;
+                g8 = 255 - g8;
+                b8 = 255 - b8;
+            }
+            r_row[x_build] = @intCast(@min((@as(u32, r8) * boost_q8_8) >> 8, 255));
+            g_row[x_build] = @intCast(@min((@as(u32, g8) * boost_q8_8) >> 8, 255));
+            b_row[x_build] = @intCast(@min((@as(u32, b8) * boost_q8_8) >> 8, 255));
+        }
+
+        var x: usize = 0;
+        const x_end = out_w & ~@as(usize, LANES - 1);
+        const v_levels: @Vector(LANES, u16) = @splat(levels_u16);
+        const v_maxq: @Vector(LANES, u16) = @splat(levels_u16 - 1);
+        const v_255_u16: @Vector(LANES, u16) = @splat(255);
+        const v_denom: @Vector(LANES, u16) = @splat(denom_u16);
+        const v_half: @Vector(LANES, u16) = @splat(denom_u16 / 2);
+
+        while (x < x_end) : (x += LANES) {
+            var rv: @Vector(LANES, u16) = undefined;
+            var gv: @Vector(LANES, u16) = undefined;
+            var bv: @Vector(LANES, u16) = undefined;
+            var tv: @Vector(LANES, u16) = undefined;
+            inline for (0..LANES) |i| {
+                rv[i] = r_row[x + i];
+                gv[i] = g_row[x + i];
+                bv[i] = b_row[x + i];
+                tv[i] = trow[x + i];
+            }
+
+            if (args.color) {
+                var qr = @as(@Vector(LANES, u16), @intCast((rv * v_levels + tv) >> @as(@Vector(LANES, u4), @splat(8))));
+                var qg = @as(@Vector(LANES, u16), @intCast((gv * v_levels + tv) >> @as(@Vector(LANES, u4), @splat(8))));
+                var qb = @as(@Vector(LANES, u16), @intCast((bv * v_levels + tv) >> @as(@Vector(LANES, u4), @splat(8))));
+                // clamp to levels-1
+                qr = @min(qr, v_maxq);
+                qg = @min(qg, v_maxq);
+                qb = @min(qb, v_maxq);
+                // map to 0..255: (q*255 + denom/2)/denom
+                const rr = @divTrunc(qr * v_255_u16 + v_half, v_denom);
+                const gg = @divTrunc(qg * v_255_u16 + v_half, v_denom);
+                const bb = @divTrunc(qb * v_255_u16 + v_half, v_denom);
+                inline for (0..LANES) |i| {
+                    const out_idx = (y * out_w + (x + i)) * 3;
+                    out[out_idx + 0] = @intCast(rr[i]);
+                    out[out_idx + 1] = @intCast(gg[i]);
+                    out[out_idx + 2] = @intCast(bb[i]);
+                }
+            } else {
+                // luminance: (77*r + 150*g + 29*b) >> 8
+                const rv32: @Vector(LANES, u32) = @intCast(rv);
+                const gv32: @Vector(LANES, u32) = @intCast(gv);
+                const bv32: @Vector(LANES, u32) = @intCast(bv);
+                const y32 = (rv32 * @as(@Vector(LANES, u32), @splat(77))) +
+                    (gv32 * @as(@Vector(LANES, u32), @splat(150))) +
+                    (bv32 * @as(@Vector(LANES, u32), @splat(29)));
+                const yv: @Vector(LANES, u16) = @intCast(@as(@Vector(LANES, u16), @intCast(y32 >> @as(@Vector(LANES, u5), @splat(8)))));
+                var q = @as(@Vector(LANES, u16), @intCast((yv * v_levels + tv) >> @as(@Vector(LANES, u4), @splat(8))));
+                q = @min(q, v_maxq);
+                const vv = @divTrunc(q * v_255_u16 + v_half, v_denom);
+                inline for (0..LANES) |i| {
+                    const out_idx = (y * out_w + (x + i)) * 3;
+                    const v: u8 = @intCast(vv[i]);
+                    out[out_idx + 0] = v;
+                    out[out_idx + 1] = v;
+                    out[out_idx + 2] = v;
+                }
+            }
+        }
+
+        // Tail scalar for leftover pixels
+        while (x < out_w) : (x += 1) {
+            const t_scaled: u16 = trow[x];
+            var or_: u8 = 0;
+            var og: u8 = 0;
+            var ob: u8 = 0;
+            if (args.color) {
+                var qr: u16 = @intCast((@as(u32, r_row[x]) * @as(u32, levels_u16) + t_scaled) >> 8);
+                var qg: u16 = @intCast((@as(u32, g_row[x]) * @as(u32, levels_u16) + t_scaled) >> 8);
+                var qb: u16 = @intCast((@as(u32, b_row[x]) * @as(u32, levels_u16) + t_scaled) >> 8);
+                if (qr >= levels_u16) qr = levels_u16 - 1;
+                if (qg >= levels_u16) qg = levels_u16 - 1;
+                if (qb >= levels_u16) qb = levels_u16 - 1;
+                or_ = @intCast((@as(u32, qr) * 255 + (denom_u16 / 2)) / denom_u16);
+                og = @intCast((@as(u32, qg) * 255 + (denom_u16 / 2)) / denom_u16);
+                ob = @intCast((@as(u32, qb) * 255 + (denom_u16 / 2)) / denom_u16);
+            } else {
+                const y8s: u16 = @intCast(((77 * r_row[x] + 150 * g_row[x] + 29 * b_row[x]) >> 8) & 0xFF);
+                var q: u16 = @intCast((@as(u32, y8s) * @as(u32, levels_u16) + t_scaled) >> 8);
+                if (q >= levels_u16) q = levels_u16 - 1;
+                const v: u8 = @intCast((@as(u32, q) * 255 + (denom_u16 / 2)) / denom_u16);
+                or_ = v;
+                og = v;
+                ob = v;
+            }
+            const out_idx = (y * out_w + x) * 3;
+            out[out_idx + 0] = or_;
+            out[out_idx + 1] = og;
+            out[out_idx + 2] = ob;
+        }
+    }
+
+    return out;
 }

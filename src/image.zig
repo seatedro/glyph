@@ -209,8 +209,15 @@ fn saveOutputTxt(ascii_text: []const u8, args: core.CoreParams) !void {
 }
 
 fn saveOutputImage(ascii_img: []u8, img: core.Image, args: core.CoreParams) !void {
-    var out_w = (img.width / args.block_size) * args.block_size;
-    var out_h = (img.height / args.block_size) * args.block_size;
+    var out_w: usize = undefined;
+    var out_h: usize = undefined;
+    if (args.render == .Pixels) {
+        out_w = img.width;
+        out_h = img.height;
+    } else {
+        out_w = (img.width / args.block_size) * args.block_size;
+        out_h = (img.height / args.block_size) * args.block_size;
+    }
 
     out_w = @max(out_w, 1);
     out_h = @max(out_h, 1);
@@ -255,13 +262,16 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
 
     switch (args.output_type) {
         core.OutputType.Image => {
-            const ascii_img = try core.generateAsciiArt(
-                allocator,
-                adjusted_img,
-                edge_result,
-                args,
-            );
-            try saveOutputImage(ascii_img, adjusted_img, args);
+            const out_img = if (args.render == .Pixels)
+                try core.generatePixelDither(allocator, adjusted_img, args)
+            else
+                try core.generateAsciiArt(
+                    allocator,
+                    adjusted_img,
+                    edge_result,
+                    args,
+                );
+            try saveOutputImage(out_img, adjusted_img, args);
         },
         core.OutputType.Stdout => {
             var t = try term.init(allocator, args.ascii_chars);

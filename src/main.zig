@@ -140,7 +140,9 @@ pub fn main() !void {
         \\    --keep_audio               Keeps the audio if input is a video
         \\    --stretched                Resizes media to fit terminal window
         \\-f, --frame_rate <f32>         Target frame rate for video output (default: matches input fps)
-        \\-d, --dither <str>             Dithering, supported values: "floydstein" (default: "floydstein")
+        \\-m, --mode <str>               Render mode: "ascii" or "pixels" (default: ascii)
+        \\-d, --dither <str>             Dithering: "none", "floydstein", "bayer4", "bayer8", "bayer16" (default: none)
+        \\    --dither_levels <u8>       Levels for ordered dither (default: 2)
         \\    --fg <str>                 Enter a hex value like "#ffffff" for the foreground color (default: "#d36a6f")
         \\    --bg <str>                 Enter a hex value like "#000000" for the background color (default: "#15091b")
         \\<str>...
@@ -220,16 +222,24 @@ pub fn main() !void {
     const ascii_info = try core.initAsciiChars(allocator, ascii_chars);
 
     const dither = blk: {
-        if (res.args.dither != null) {
-            if (std.mem.eql(u8, res.args.dither.?, "floydstein")) {
-                break :blk core.DitherType.FloydSteinberg;
-            } else {
-                break :blk core.DitherType.None;
-            }
-        } else {
-            break :blk core.DitherType.None;
+        if (res.args.dither) |d| {
+            if (std.mem.eql(u8, d, "none")) break :blk core.DitherType.None;
+            if (std.mem.eql(u8, d, "floydstein")) break :blk core.DitherType.FloydSteinberg;
+            if (std.mem.eql(u8, d, "bayer4")) break :blk core.DitherType.Bayer4;
+            if (std.mem.eql(u8, d, "bayer8")) break :blk core.DitherType.Bayer8;
+            if (std.mem.eql(u8, d, "bayer16")) break :blk core.DitherType.Bayer16;
         }
+        break :blk core.DitherType.None;
     };
+
+    const render: core.RenderType = blk: {
+        if (res.args.mode) |m| {
+            if (std.mem.eql(u8, m, "pixels")) break :blk .Pixels;
+        }
+        break :blk .Ascii;
+    };
+
+    const dither_levels: u8 = res.args.dither_levels orelse 2;
 
     const fg_color = blk: {
         if (res.args.fg != null) {
@@ -265,6 +275,8 @@ pub fn main() !void {
         .frame_rate = res.args.frame_rate,
         .stretched = res.args.stretched != 0,
         .dither = dither,
+        .render = render,
+        .dither_levels = dither_levels,
         .fg_color = fg_color,
         .bg_color = bg_color,
     };
