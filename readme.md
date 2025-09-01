@@ -5,7 +5,7 @@ converts images/video to ascii art
 
 ## Dependencies
 
-these dependencies are only for the `av` library to output videos. This will be opt-in in the future.
+these dependencies are needed for the `av` library to output videos. This will be opt-in in the future.
 
 #### Linux:
 ```bash

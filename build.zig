@@ -44,6 +44,11 @@ pub fn build(b: *std.Build) !void {
             av_module = ffmpeg_dep.module("av");
         }
     }
+    const rescale_module = b.addModule("libglyphrescale", .{
+        .root_source_file = b.path("src/rescale.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const libglyph = b.addModule("libglyph", .{
         .root_source_file = b.path("src/core.zig"),
@@ -51,6 +56,7 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "stb", .module = stb_module },
+            .{ .name = "libglyphrescale", .module = rescale_module },
         },
     });
 
@@ -80,10 +86,13 @@ pub fn build(b: *std.Build) !void {
 
     const image_module = b.addModule("libglyphimg", .{
         .root_source_file = b.path("src/image.zig"),
+        .target = target,
+        .optimize = optimize,
         .imports = &.{
             .{ .name = "stb", .module = stb_module },
             .{ .name = "libglyph", .module = libglyph },
             .{ .name = "libglyphterm", .module = term_module },
+            .{ .name = "libglyphrescale", .module = rescale_module },
         },
     });
     if (av_enabled) {
