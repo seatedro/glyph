@@ -451,6 +451,21 @@ pub fn processVideo(allocator: std.mem.Allocator, args: core.CoreParams) !void {
     var enc_ctx = try createEncoder(dec_ctx, stream_info.stream, args);
     defer av.avcodec_free_context(@ptrCast(&enc_ctx));
 
+    if (args.output) |_| {
+        if (args.scale > 0 and args.scale != 1.0) {
+            const bs: usize = @intCast(args.block_size);
+            const base_w: usize = @intCast(dec_ctx.width);
+            const base_h: usize = @intCast(dec_ctx.height);
+            const scaled_w: usize = @intFromFloat(@round(@as(f32, @floatFromInt(base_w)) / args.scale));
+            const scaled_h: usize = @intFromFloat(@round(@as(f32, @floatFromInt(base_h)) / args.scale));
+            // Align to block size (and clamp to minimum 1)
+            const aligned_w: usize = @max((if (bs > 0) scaled_w / bs * bs else scaled_w), 1);
+            const aligned_h: usize = @max((if (bs > 0) scaled_h / bs * bs else scaled_h), 1);
+            enc_ctx.*.width = @intCast(aligned_w);
+            enc_ctx.*.height = @intCast(aligned_h);
+        }
+    }
+
     const input_frame_rate = @as(f64, @floatFromInt(stream_info.stream.*.r_frame_rate.num)) /
         @as(f64, @floatFromInt(stream_info.stream.*.r_frame_rate.den));
     const target_frame_rate = args.frame_rate orelse input_frame_rate;
@@ -622,8 +637,21 @@ fn producerTask(
     const output_pix_fmt = av.AV_PIX_FMT_RGB24;
 
     rgb_frame.*.format = output_pix_fmt;
-    rgb_frame.*.width = @max(@divFloor(dec_ctx.*.width, args.block_size) * args.block_size, 1);
-    rgb_frame.*.height = @max(@divFloor(dec_ctx.*.height, args.block_size) * args.block_size, 1);
+    // Determine processing size. If writing output, honor args.scale so GIF and non-GIF paths match.
+    if (op != null and args.scale > 0 and args.scale != 1.0) {
+        const bs: usize = @intCast(args.block_size);
+        const base_w_usize: usize = @intCast(dec_ctx.*.width);
+        const base_h_usize: usize = @intCast(dec_ctx.*.height);
+        const scaled_w_usize: usize = @intFromFloat(@round(@as(f32, @floatFromInt(base_w_usize)) / args.scale));
+        const scaled_h_usize: usize = @intFromFloat(@round(@as(f32, @floatFromInt(base_h_usize)) / args.scale));
+        const aligned_w_usize: usize = @max((if (bs > 0) scaled_w_usize / bs * bs else scaled_w_usize), 1);
+        const aligned_h_usize: usize = @max((if (bs > 0) scaled_h_usize / bs * bs else scaled_h_usize), 1);
+        rgb_frame.*.width = @intCast(aligned_w_usize);
+        rgb_frame.*.height = @intCast(aligned_h_usize);
+    } else {
+        rgb_frame.*.width = @max(@divFloor(dec_ctx.*.width, args.block_size) * args.block_size, 1);
+        rgb_frame.*.height = @max(@divFloor(dec_ctx.*.height, args.block_size) * args.block_size, 1);
+    }
     if (av.av_frame_get_buffer(rgb_frame, 0) < 0) {
         return error.FailedToAllocFrameBuf;
     }

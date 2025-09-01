@@ -1,138 +1,149 @@
-# glyph - ascii from media
+# glyph — a modern ascii renderer
 
-converts images/video to ascii art
-
-
-## Dependencies
-
-these dependencies are needed for the `av` library to output videos. This will be opt-in in the future.
-
-#### Linux:
-```bash
-sudo apt-get install libavutil-dev libavformat-dev libavcodec-dev libswscale-dev
-```
-
-#### MacOS:
-```bash
-brew install ffmpeg pkgconf
-```
-
-#### Windows:
-```bash
-choco install ffmpeg-shared
-```
+Converts images and videos into ASCII art.
 
 ## Installing
 
-#### Homebrew
+### Homebrew
 ```bash
 brew install glyph
 ```
 
-### build from source
+### Build from source
+```bash
+zig build -Doptimize=ReleaseFast
+```
+The executable is placed at `./zig-out/bin`.
 
-`zig build -Doptimize=ReleaseFast`
-
-the above command builds an executable found at `./zig-out/bin`
-
-if you want to just directly run the executable, run:
-
-`zig build run -Doptimize=ReleaseFast -- [options]`
-
-see below for explanations for available options
+Run directly with:
+```bash
+zig build run -Doptimize=ReleaseFast -- [options]
+```
 
 ## Usage
 
-run the program with the following options (the default zig install directory is `./zig-out/bin`):
-   ```
-   /path/to/glyph [options]
-   ```
-1. options:
-   - `-h, --help`: print the help message and exit
-   - `-i, --input <file>`: specify the input media file path (local path/URL) (required)
-   - `-o, --output <file>`: specify the output media file (txt/img/vid) (required)
-   - `-c, --color`: use color ascii characters (optional)
-   - `-n, --invert_color`: Inverts the color values (optional)
-   - `-s, --scale <float>`: set the downscale or upscale factor (optional, default: 1)
-   - `-e, --detect_edges`: enable edge detection (optional)
-   - `    --sigma1 <float>`: set the sigma1 value for DoG filter (optional, default: 0.3)
-   - `    --sigma2 <float>`: set the sigma2 value for DoG filter (optional, default: 1.0)
-   - `    --dither floydstein`: enable dithering (currently only supports floydstein algorithm)
-   - `-b, --brightness_boost <float>`: increase/decrease perceived brightness (optional, default: 1.0)
-   advanced options:
-   - `    --full_characters`: Uses all ascii characters in generated output.
-   - `    --ascii_chars <string>`: Use what characters you want to use in the generated output. (default: " .:-=+*%@#")
-   - `    --disable_sort`: Prevents sorting of the ascii_chars by size.
-   - `    --block_size <u8>`: Set the size of the blocks. (default: 8)
-   - `    --threshold_disabled`: Disables the threshold.
-   - `    --codec <string>`: Set the encoder codec like "libx264" or "hevc_videotoolbox". (default: searches for encoders on your machine)
-   - `    --keep_audio`: Preserves audio from input video.
-   - `    --stretched`: Resizes media to fit terminal window
-   - `-f, --frame_rate`: Target frame rate for video output (default: matches input fps)
+Basic usage (default Zig install path is `./zig-out/bin`):
+```
+/path/to/glyph [options]
+```
 
->To render on the terminal directly, just omit the output option.
+- `-h, --help`: Print help and exit
+- `-v, --version`: Print version and exit
+- `-i, --input <str>`: Input media file (image or video)
+- `-o, --output <str>`: Output file (png/gif/mp4/… or .txt). Omit to render in terminal
+- `-c, --color`: Use color ASCII characters
+- `-n, --invert_color`: Invert color values
+- `-a, --auto_adjust`: Auto-adjust brightness/contrast
+- `-s, --scale <f32>`: Scale factor (default 1.0). Values >1 downscale (e.g., 2 halves size)
+- `    --symbols <str>`: Character set: `ascii` or `block` (default: ascii)
+- `-e, --detect_edges`: Enable edge detection
+- `    --sigma1 <f32>`: DoG sigma1 (default 0.5)
+- `    --sigma2 <f32>`: DoG sigma2 (default 1.0)
+- `-b, --brightness_boost <f32>`: Brightness multiplier (default 1.0)
+- `    --full_characters`: Use full character spectrum
+- `    --ascii_chars <str>`: Custom characters (default: " .:-=+*%#@")
+- `    --disable_sort`: Don’t sort `--ascii_chars` by size
+- `    --block_size <u8>`: ASCII block size (default 8)
+- `    --threshold_disabled`: Disable threshold
+- `    --codec <str>`: Encoder (e.g., `libx264`, `libx265`, `hevc_nvenc`, `h264_videotoolbox`)
+- `    --keep_audio`: Keep input audio in video output
+- `    --stretched`: Fit render to terminal window (stdout mode)
+- `-f, --frame_rate <f32>`: Target fps for video output (default: input fps)
+- `-m, --mode <str>`: `ascii` or `pixels` (default: ascii)
+- `-d, --dither <str>`: `none`, `floydstein`, `bayer4`, `bayer8`, `bayer16` (default: none)
+- `    --dither_levels <u8>`: Levels for ordered dither (default: 2)
+- `    --fg <#rrggbb>`: Foreground color (pixel mode)
+- `    --bg <#rrggbb>`: Background color (pixel mode)
 
->To output to a text file, use the .txt extension when setting the output option
+> To render to the terminal, omit `--output`.
+> To save ASCII text, set an output with `.txt` extension.
 
-2. examples:
+### FFmpeg Codec Support
 
-   ### Image
+Glyph includes FFmpeg with support for both software and hardware-accelerated codecs:
 
-   basic usage:
-   ```bash
-   glyph -i input.jpg -o output.png
-   ```
+#### Software Codecs
+- **x264** (`libx264`) - H.264 video encoder
+- **x265** (`libx265`) - HEVC/H.265 video encoder (decoder only)
+- **libmp3lame** - MP3 audio encoder
+- **libvorbis** - Vorbis audio encoder
 
-   text file output:
-   ```bash
-   glyph -i input.jpg -o output.txt
-   ```
+#### Hardware Codecs (Platform-dependent)
+- **NVIDIA NVENC** (`h264_nvenc`, `hevc_nvenc`) - Available on Windows/Linux with NVIDIA GPUs
+- **VideoToolbox** (`h264_videotoolbox`, `hevc_videotoolbox`) - Available on macOS
+- **VAAPI** (`h264_vaapi`, `hevc_vaapi`) - Available on Linux for Intel/AMD GPUs
+- **V4L2** (`h264_v4l2m2m`, `hevc_v4l2m2m`) - Available on Linux for various hardware
 
-   using color:
-   ```bash
-   glyph -i input.png -o output.png -c
-   ```
+Use the `--codec` parameter to specify the encoder. For example:
+```bash
+# Software encoding
+glyph -i input.mp4 -o output.mp4 --codec libx264
 
-   with edge detection, color, and custom downscale:
-   ```bash
-   glyph -i input.jpeg -o output.png -s 4 -e -c
-   ```
+# Hardware encoding (NVIDIA)
+glyph -i input.mp4 -o output.mp4 --codec h264_nvenc
 
-   with brightness boost and url input:
-   ```bash
-   # bonus (this is a sweet wallpaper)
-   glyph -i "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg" -o output.png -e -c -b 1.5
-   ```
+# Hardware encoding (macOS)
+glyph -i input.mp4 -o output.mp4 --codec h264_videotoolbox
 
-   terminal output (just omit the output option):
-   ```bash
-   glyph -i "https://w.wallhaven.cc/full/p9/wallhaven-p9gr2p.jpg" -e -c -b 1.5
-   ```
+# Hardware encoding (Linux VAAPI)
+glyph -i input.mp4 -o output.mp4 --codec h264_vaapi
+```
 
-   ### Video
 
-   with an input video (no urls allowed):
-   ```bash
-   glyph -i /path/to/input/video.mp4 -o ascii.mp4 --codec hevc_nvenc --keep_audio
-   ```
+## Examples
 
-   with an input video and rendering on the terminal (stretched to fit terminal):
-   ```bash
-   glyph -i /path/to/input/video.mp4 --stretched -c
-   ```
+### Image
 
-   with input video and custom ffmpeg encoder options:
-   ```bash
-   glyph -i /path/to/input/video.mp4 -o ascii.mp4 -c --codec libx264 --keep_audio-- -preset fast -crf 20
-   ```
+Basic usage:
+```bash
+glyph -i input.jpg -o output.png
+```
 
-   with input video and custom ffmpeg encoder options:
-   ```bash
-   glyph -i /path/to/input/video.mp4 -o ascii.mp4 -c --codec libx264 --keep_audio-- -preset fast -crf 20
-   ```
+Text output:
+```bash
+glyph -i input.jpg -o output.txt
+```
 
-3. the program will generate an ascii art version of your input media and save it as a new media file.
+Color:
+```bash
+glyph -i input.png -o output.png -c
+```
 
-for images: output file needs to be a `.png` since i saw some weird issues with jpegs.
+Edge detection, color, downscale:
+```bash
+glyph -i input.jpeg -o output.png -s 4 -e -c
+```
 
-4. using the long arguments on windows may or may not work. please use the short arguments for now.
+Dithering
+```bash
+glyph -i input.png -o output.png -a -s 2 --mode pixels --dither bayer8 --dither_levels 2
+```
+
+
+Terminal output:
+```bash
+glyph -i input.jpg -e -c -b 1.5
+```
+
+### Video
+
+Encode MP4 with NVENC, keep audio:
+```bash
+glyph -i /path/to/input.mp4 -o ascii.mp4 --codec hevc_nvenc --keep_audio
+```
+
+Render in terminal (fit to terminal):
+```bash
+glyph -i /path/to/input.mp4 --stretched -c
+```
+
+Custom encoder options (after `--`):
+```bash
+glyph -i /path/to/input.mp4 -o ascii.mp4 -c --codec libx264 -- --preset fast --crf 20
+```
+
+GIF output:
+```bash
+glyph -i /path/to/input.mp4 -o out.gif -s 2 -f 12
+```
+

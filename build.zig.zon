@@ -12,8 +12,7 @@
             .hash = "1220c4fe5a4c4ebec402f5cdef08bc264b56fb07f259107d2b01ba8d416d88624b50",
         },
         .ffmpeg = .{
-            .url = "vendor/ffmpeg",
-            .hash = "ffmpeg-7.0.1-6-zT7QA0x2IAS_nOtEa3NS_2oqSdU7_ur-J2whihOTPyxa",
+            .path = "vendor/ffmpeg",
             .lazy = true,
         },
     },
