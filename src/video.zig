@@ -8,6 +8,7 @@ const stb = @import("stb");
 const Thread = std.Thread;
 const Mutex = Thread.Mutex;
 const Condition = Thread.Condition;
+const log = std.log.scoped(.video);
 
 pub fn FrameBuffer(comptime T: type) type {
     return struct {
@@ -92,9 +93,115 @@ pub fn FrameBuffer(comptime T: type) type {
     };
 }
 
-// -----------------------
-// VIDEO PROCESSING FUNCTIONS
-// -----------------------
+fn isGifOutput(args: core.CoreParams) bool {
+    if (args.output) |output_path| {
+        return std.mem.eql(u8, std.fs.path.extension(output_path), ".gif");
+    }
+    return false;
+}
+
+const ScalerSpec = struct {
+    src_w: c_int,
+    src_h: c_int,
+    src_fmt: c_int,
+    dst_w: c_int,
+    dst_h: c_int,
+    dst_fmt: c_int,
+};
+
+fn makeScaler(spec: ScalerSpec) ?*av.struct_SwsContext {
+    return av.sws_getContext(
+        spec.src_w,
+        spec.src_h,
+        spec.src_fmt,
+        spec.dst_w,
+        spec.dst_h,
+        spec.dst_fmt,
+        av.SWS_BILINEAR,
+        null,
+        null,
+        null,
+    );
+}
+
+const GifFilter = struct {
+    graph: *av.AVFilterGraph,
+    src: *av.AVFilterContext,
+    sink: *av.AVFilterContext,
+
+    fn init(src_w: c_int, src_h: c_int, dst_w: c_int, dst_h: c_int) !GifFilter {
+        const graph = av.avfilter_graph_alloc();
+        if (graph == null) return error.FailedToCreateOutputCtx;
+
+        const buffersrc = av.avfilter_get_by_name("buffer");
+        const buffersink = av.avfilter_get_by_name("buffersink");
+        if (buffersrc == null or buffersink == null) return error.FailedToCreateOutputCtx;
+
+        var args_buf: [128]u8 = undefined;
+        const args_str = try std.fmt.bufPrintZ(
+            &args_buf,
+            "video_size={d}x{d}:pix_fmt={d}:time_base=1/100:pixel_aspect=1/1",
+            .{ src_w, src_h, @as(c_int, av.AV_PIX_FMT_RGB24) },
+        );
+
+        var src_ctx_ptr: ?*av.AVFilterContext = null;
+        if (av.avfilter_graph_create_filter(&src_ctx_ptr, buffersrc, "in", args_str.ptr, null, graph) < 0) {
+            av.avfilter_graph_free(@constCast(@ptrCast(&graph)));
+            return error.FailedToCreateOutputCtx;
+        }
+
+        var sink_ctx_ptr: ?*av.AVFilterContext = null;
+        if (av.avfilter_graph_create_filter(&sink_ctx_ptr, buffersink, "out", null, null, graph) < 0) {
+            av.avfilter_graph_free(@constCast(@ptrCast(&graph)));
+            return error.FailedToCreateOutputCtx;
+        }
+
+        var graph_desc_buf: [256]u8 = undefined;
+        const graph_desc = try std.fmt.bufPrintZ(
+            &graph_desc_buf,
+            "[in]scale={d}:{d}:flags=lanczos,split[s0][s1];[s0]palettegen=stats_mode=full[p];[s1][p]paletteuse=dither=sierra2_4a:new=1[out]",
+            .{ dst_w, dst_h },
+        );
+
+        const inputs = av.avfilter_inout_alloc();
+        const outputs = av.avfilter_inout_alloc();
+        if (inputs == null or outputs == null) {
+            av.avfilter_inout_free(@constCast(@ptrCast(&inputs)));
+            av.avfilter_inout_free(@constCast(@ptrCast(&outputs)));
+            av.avfilter_graph_free(@constCast(@ptrCast(&graph)));
+            return error.FailedToCreateOutputCtx;
+        }
+        defer av.avfilter_inout_free(@constCast(@ptrCast(&inputs)));
+        defer av.avfilter_inout_free(@constCast(@ptrCast(&outputs)));
+
+        outputs.*.name = av.av_strdup("in");
+        outputs.*.filter_ctx = src_ctx_ptr;
+        outputs.*.pad_idx = 0;
+        outputs.*.next = null;
+
+        inputs.*.name = av.av_strdup("out");
+        inputs.*.filter_ctx = sink_ctx_ptr;
+        inputs.*.pad_idx = 0;
+        inputs.*.next = null;
+
+        if (av.avfilter_graph_parse_ptr(graph, graph_desc.ptr, @constCast(@ptrCast(&inputs)), @constCast(@ptrCast(&outputs)), null) < 0) {
+            av.avfilter_graph_free(@constCast(@ptrCast(&graph)));
+            return error.FailedToCreateOutputCtx;
+        }
+        if (av.avfilter_graph_config(graph, null) < 0) {
+            av.avfilter_graph_free(@constCast(@ptrCast(&graph)));
+            return error.FailedToCreateOutputCtx;
+        }
+
+        return .{ .graph = graph, .src = src_ctx_ptr.?, .sink = sink_ctx_ptr.? };
+    }
+
+    fn deinit(self: *GifFilter) void {
+        var g: ?*av.AVFilterGraph = self.graph;
+        av.avfilter_graph_free(@constCast(@ptrCast(&g)));
+        self.* = undefined;
+    }
+};
 
 fn openInputVideo(path: []const u8) !*av.AVFormatContext {
     var fmt_ctx: ?*av.AVFormatContext = null;
@@ -165,7 +272,6 @@ fn createDecoder(stream: *av.AVStream) !*av.AVCodecContext {
 fn setEncoderOption(enc_ctx: *av.AVCodecContext, key: []const u8, value: []const u8) bool {
     var opt: ?*const av.AVOption = null;
 
-    // Try to find the option in AVCodecContext
     opt = av.av_opt_find(@ptrCast(enc_ctx), key.ptr, null, 0, 0);
     if (opt != null) {
         if (av.av_opt_set(enc_ctx, key.ptr, value.ptr, 0) >= 0) {
@@ -173,7 +279,6 @@ fn setEncoderOption(enc_ctx: *av.AVCodecContext, key: []const u8, value: []const
         }
     }
 
-    // If not found or setting failed, try in priv_data
     if (enc_ctx.*.priv_data != null) {
         opt = av.av_opt_find(enc_ctx.*.priv_data, key.ptr, null, 0, 0);
         if (opt != null) {
@@ -191,45 +296,76 @@ fn createEncoder(
     stream: *av.AVStream,
     args: core.CoreParams,
 ) !*av.AVCodecContext {
-    const encoder = if (args.codec) |codec| av.avcodec_find_encoder_by_name(codec.ptr) else av.avcodec_find_encoder_by_name("h264_nvenc") orelse
-        av.avcodec_find_encoder_by_name("hevc_amf") orelse
-        av.avcodec_find_encoder_by_name("hevc_qsv") orelse
-        av.avcodec_find_encoder_by_name("hevc_videotoolbox") orelse
-        av.avcodec_find_encoder_by_name("libx265") orelse
-        av.avcodec_find_encoder_by_name("h264_amf") orelse
-        av.avcodec_find_encoder_by_name("h264_qsv") orelse
-        av.avcodec_find_encoder_by_name("libx264") orelse
-        return error.EncoderNotFound;
+    const encoder = if (args.codec) |codec| av.avcodec_find_encoder_by_name(codec.ptr) else blk: {
+        if (args.output) |output_path| {
+            const ext = std.fs.path.extension(output_path);
+            if (std.mem.eql(u8, ext, ".gif")) {
+                break :blk av.avcodec_find_encoder_by_name("gif") orelse return error.EncoderNotFound;
+            }
+        }
+
+        break :blk av.avcodec_find_encoder_by_name("libx265") orelse
+            av.avcodec_find_encoder_by_name("libx264") orelse
+            av.avcodec_find_encoder_by_name("h264_nvenc") orelse
+            av.avcodec_find_encoder_by_name("h264_vaapi") orelse
+            av.avcodec_find_encoder_by_name("h264_videotoolbox") orelse
+            av.avcodec_find_encoder_by_name("mpeg4") orelse
+            return error.EncoderNotFound;
+    };
 
     const enc_ctx = av.avcodec_alloc_context3(encoder);
     if (enc_ctx == null) {
         return error.FailedToAllocCodecCtx;
     }
 
-    // Setting up encoding context
     enc_ctx.*.width = codec_ctx.width;
     enc_ctx.*.height = codec_ctx.height;
-    enc_ctx.*.pix_fmt = av.AV_PIX_FMT_YUV420P;
-    // enc_ctx.*.pix_fmt = encoder.*.pix_fmts[0];
-    enc_ctx.*.time_base = stream.time_base;
-    enc_ctx.*.framerate = .{
-        .num = codec_ctx.framerate.num,
-        .den = 1,
-    };
-    enc_ctx.*.gop_size = 10;
-    enc_ctx.*.max_b_frames = 1;
-    enc_ctx.*.flags |= av.AV_CODEC_FLAG_GLOBAL_HEADER;
 
-    // Ensure the stride is aligned to 32 bytes
-    const stride = (enc_ctx.*.width + 31) & ~@as(c_int, 31);
-    _ = av.av_opt_set(enc_ctx, "stride", stride, 0);
+    const is_gif_encoder = if (args.output) |output_path|
+        std.mem.eql(u8, std.fs.path.extension(output_path), ".gif")
+    else
+        false;
+
+    if (is_gif_encoder) {
+        // Use PAL8 (palettized) for gif encoder together with paletteuse filter output.
+        // Set a stable time_base for GIF in centiseconds (1/100), so each increment of PTS is 1 frame delay unit.
+        enc_ctx.*.pix_fmt = av.AV_PIX_FMT_PAL8;
+        enc_ctx.*.time_base = .{ .num = 1, .den = 100 };
+        enc_ctx.*.framerate = .{
+            .num = codec_ctx.framerate.num,
+            .den = codec_ctx.framerate.den,
+        };
+    } else {
+        enc_ctx.*.pix_fmt = av.AV_PIX_FMT_YUV420P;
+
+        const encoder_name = if (encoder.*.name) |name| std.mem.span(name) else "";
+        if (std.mem.eql(u8, encoder_name, "mpeg4")) {
+            enc_ctx.*.time_base = .{ .num = 1, .den = 25000 };
+        } else {
+            enc_ctx.*.time_base = stream.time_base;
+        }
+
+        enc_ctx.*.framerate = .{
+            .num = codec_ctx.framerate.num,
+            .den = 1,
+        };
+        enc_ctx.*.gop_size = 10;
+        enc_ctx.*.max_b_frames = 1;
+        enc_ctx.*.flags |= av.AV_CODEC_FLAG_GLOBAL_HEADER;
+    }
+
+    // Ensure the stride is aligned to 32 bytes (not needed for GIF)
+    if (!is_gif_encoder) {
+        const stride = (enc_ctx.*.width + 31) & ~@as(c_int, 31);
+        _ = av.av_opt_set(enc_ctx, "stride", stride, 0);
+    }
 
     var it = args.ffmpeg_options.iterator();
     while (it.next()) |entry| {
         const k = entry.key_ptr.*;
         const v = entry.value_ptr.*;
         if (!setEncoderOption(enc_ctx, k, v)) {
-            std.debug.print("Warning: Failed to set FFmpeg option: {s}={s}\n", .{ k, v });
+            log.warn("Failed to set FFmpeg option: {s}={s}", .{ k, v });
         }
     }
 
@@ -260,7 +396,8 @@ fn createOutputCtx(output_path: []const u8, enc_ctx: *av.AVCodecContext, audio_s
         return error.FailedToSetCodecParams;
     }
 
-    // Create audio stream
+    video_stream.*.time_base = enc_ctx.*.time_base;
+
     var audio_out_stream: ?*av.AVStream = null;
     if (audio_stream) |as| {
         audio_out_stream = av.avformat_new_stream(fmt_ctx, null);
@@ -314,18 +451,17 @@ pub fn processVideo(allocator: std.mem.Allocator, args: core.CoreParams) !void {
     var enc_ctx = try createEncoder(dec_ctx, stream_info.stream, args);
     defer av.avcodec_free_context(@ptrCast(&enc_ctx));
 
-    // Extract frame rate
     const input_frame_rate = @as(f64, @floatFromInt(stream_info.stream.*.r_frame_rate.num)) /
         @as(f64, @floatFromInt(stream_info.stream.*.r_frame_rate.den));
     const target_frame_rate = args.frame_rate orelse input_frame_rate;
     const frame_time_ns = @as(u64, @intFromFloat(1e9 / target_frame_rate));
-    std.debug.print("Input FPS: {d}, Target FPS: {d}, FrameTime: {d}\n", .{ input_frame_rate, target_frame_rate, frame_time_ns });
+    log.info("fps_in={d:.2} fps_out={d:.2} frame_ns={d}", .{ input_frame_rate, target_frame_rate, frame_time_ns });
 
     var audio_stream_info: ?AVStream = null;
     if (args.keep_audio) {
         audio_stream_info = openAudioStream(input_ctx) catch |err| blk: {
             if (err == error.AudioStreamNotFound) {
-                std.debug.print("No audio stream found in input video. Continuing without audio.\n", .{});
+                log.info("No audio stream; continue without audio", .{});
                 break :blk null;
             } else {
                 return err;
@@ -458,7 +594,6 @@ fn producerTask(
     t: term,
     args: core.CoreParams,
 ) !void {
-    // Get total frames
     var total_frames: usize = undefined;
     var progress: std.Progress.Node = undefined;
     var root_node: std.Progress.Node = undefined;
@@ -480,7 +615,9 @@ fn producerTask(
     defer av.av_frame_free(&rgb_frame);
 
     const input_pix_fmt = dec_ctx.*.pix_fmt;
-    std.debug.print("Input pixel format: {s}\n", .{av.av_get_pix_fmt_name(input_pix_fmt)});
+    if (builtin.mode == .Debug) {
+        log.debug("input_pix_fmt={s}", .{av.av_get_pix_fmt_name(input_pix_fmt)});
+    }
 
     const output_pix_fmt = av.AV_PIX_FMT_RGB24;
 
@@ -491,45 +628,45 @@ fn producerTask(
         return error.FailedToAllocFrameBuf;
     }
 
-    var yuv_frame = av.av_frame_alloc();
-    defer av.av_frame_free(&yuv_frame);
+    const is_gif_output = isGifOutput(args);
 
-    yuv_frame.*.format = av.AV_PIX_FMT_YUV420P;
-    yuv_frame.*.width = enc_ctx.*.width;
-    yuv_frame.*.height = enc_ctx.*.height;
-    if (av.av_frame_get_buffer(yuv_frame, 0) < 0) {
-        return error.FailedToAllocFrameBuf;
+    var output_frame: ?*av.AVFrame = null;
+    if (!is_gif_output) {
+        output_frame = av.av_frame_alloc();
+        output_frame.?.*.format = enc_ctx.*.pix_fmt; // Use encoder's pixel format
+        output_frame.?.*.width = enc_ctx.*.width;
+        output_frame.?.*.height = enc_ctx.*.height;
+        if (av.av_frame_get_buffer(output_frame.?, 0) < 0) {
+            return error.FailedToAllocFrameBuf;
+        }
+    }
+    defer {
+        if (output_frame) |of| {
+            av.av_frame_free(@constCast(@ptrCast(&of)));
+        }
     }
 
-    const sws_ctx = av.sws_getContext(
-        dec_ctx.width,
-        dec_ctx.height,
-        input_pix_fmt,
-        dec_ctx.width,
-        dec_ctx.height,
-        output_pix_fmt,
-        av.SWS_BILINEAR,
-        null,
-        null,
-        null,
-    );
+    const sws_ctx = makeScaler(.{
+        .src_w = dec_ctx.width,
+        .src_h = dec_ctx.height,
+        .src_fmt = input_pix_fmt,
+        .dst_w = rgb_frame.*.width,
+        .dst_h = rgb_frame.*.height,
+        .dst_fmt = output_pix_fmt,
+    });
     defer av.sws_freeContext(sws_ctx);
 
     var term_ctx: ?*av.struct_SwsContext = undefined;
     var term_frame: *av.struct_AVFrame = undefined;
     if (op == null) {
-        term_ctx = av.sws_getContext(
-            dec_ctx.width,
-            dec_ctx.height,
-            output_pix_fmt,
-            @intCast(t.size.w),
-            @intCast(t.size.h),
-            output_pix_fmt,
-            av.SWS_BILINEAR,
-            null,
-            null,
-            null,
-        );
+        term_ctx = makeScaler(.{
+            .src_w = dec_ctx.width,
+            .src_h = dec_ctx.height,
+            .src_fmt = output_pix_fmt,
+            .dst_w = @intCast(t.size.w),
+            .dst_h = @intCast(t.size.h),
+            .dst_fmt = output_pix_fmt,
+        });
         term_frame = av.av_frame_alloc();
     }
     defer {
@@ -551,24 +688,46 @@ fn producerTask(
         (1 << 16) - 1,
     );
 
-    const out_sws_ctx = av.sws_getContext(
-        rgb_frame.*.width,
-        rgb_frame.*.height,
-        @intCast(rgb_frame.*.format),
-        yuv_frame.*.width,
-        yuv_frame.*.height,
-        @intCast(yuv_frame.*.format),
-        av.SWS_BILINEAR,
-        null,
-        null,
-        null,
-    );
-    defer av.sws_freeContext(out_sws_ctx);
+    // Only create output scaler for non-GIF formats
+    var out_sws_ctx: ?*av.struct_SwsContext = null;
+    if (!is_gif_output) {
+        out_sws_ctx = makeScaler(.{
+            .src_w = rgb_frame.*.width,
+            .src_h = rgb_frame.*.height,
+            .src_fmt = @intCast(rgb_frame.*.format),
+            .dst_w = output_frame.?.*.width,
+            .dst_h = output_frame.?.*.height,
+            .dst_fmt = @intCast(output_frame.?.*.format),
+        });
+    }
+    defer if (out_sws_ctx) |ctx| av.sws_freeContext(ctx);
+
+    var gif_filter: ?GifFilter = null;
+    var gif_pts: i64 = 0; // running PTS in 1/100s for GIF
+    var gif_delay_ticks: i64 = 1; // default to 1 centisecond per frame
+    defer if (gif_filter) |*gf| gf.deinit();
+    if (op != null and is_gif_output) {
+        gif_filter = try GifFilter.init(
+            @intCast(rgb_frame.*.width),
+            @intCast(rgb_frame.*.height),
+            enc_ctx.width,
+            enc_ctx.height,
+        );
+        // Compute frame duration in encoder time_base units (1/100s)
+        // delay = max(floor(100 / fps), 1)
+        const fps_num: i64 = @intCast(if (enc_ctx.*.framerate.num != 0) enc_ctx.*.framerate.num else stream_info.stream.*.r_frame_rate.num);
+        const fps_den: i64 = @intCast(if (enc_ctx.*.framerate.den != 0) enc_ctx.*.framerate.den else stream_info.stream.*.r_frame_rate.den);
+        if (fps_num > 0) {
+            gif_delay_ticks = @max(@divFloor(100 * fps_den, fps_num), 1);
+        } else {
+            gif_delay_ticks = 5;
+        }
+    }
 
     var frame_count: usize = 0;
     const start_time = std.time.milliTimestamp();
     var last_update_time = start_time;
-    const update_interval: i64 = 1000; // Update every 1 second
+    const update_interval: i64 = 1000;
     while (av.av_read_frame(input_ctx, packet) >= 0) {
         defer av.av_packet_unref(packet);
 
@@ -590,41 +749,55 @@ fn producerTask(
                 frame_count += 1;
                 if (op) |output| {
                     try convertFrameToAscii(allocator, rgb_frame, args);
-                    _ = av.sws_scale(
-                        out_sws_ctx,
-                        &rgb_frame.*.data,
-                        &rgb_frame.*.linesize,
-                        0,
-                        rgb_frame.*.height,
-                        &yuv_frame.*.data,
-                        &yuv_frame.*.linesize,
-                    );
-
-                    yuv_frame.*.pts = frame.*.pts;
-
-                    var enc_packet = av.av_packet_alloc();
-                    defer av.av_packet_free(&enc_packet);
-
-                    if (av.avcodec_send_frame(enc_ctx, yuv_frame) >= 0) {
-                        while (av.avcodec_receive_packet(enc_ctx, enc_packet) >= 0) {
-                            enc_packet.*.stream_index = 0;
-                            enc_packet.*.pts = av.av_rescale_q(
-                                enc_packet.*.pts,
-                                enc_ctx.*.time_base,
-                                output.video_stream.*.time_base,
-                            );
-                            enc_packet.*.dts = av.av_rescale_q(
-                                enc_packet.*.dts,
-                                enc_ctx.*.time_base,
-                                output.video_stream.*.time_base,
-                            );
-                            enc_packet.*.duration = av.av_rescale_q(
-                                enc_packet.*.duration,
-                                enc_ctx.*.time_base,
-                                output.video_stream.*.time_base,
-                            );
-
-                            _ = av.av_interleaved_write_frame(output.ctx, enc_packet);
+                    if (is_gif_output and gif_filter != null) {
+                        // Feed ASCII-modified RGB24 frame into filtergraph
+                        // Note: format should already be RGB24 from above
+                        std.debug.assert(rgb_frame.*.format == av.AV_PIX_FMT_RGB24);
+                        // Set monotonically increasing PTS in centiseconds
+                        rgb_frame.*.pts = gif_pts;
+                        if (av.av_buffersrc_write_frame(gif_filter.?.src, rgb_frame) < 0) {
+                            return error.FailedToFeedFilterGraph;
+                        }
+                        var filt_frame = av.av_frame_alloc();
+                        defer av.av_frame_free(&filt_frame);
+                        while (av.av_buffersink_get_frame(gif_filter.?.sink, filt_frame) >= 0) {
+                            var enc_packet = av.av_packet_alloc();
+                            defer av.av_packet_free(&enc_packet);
+                            if (av.avcodec_send_frame(enc_ctx, filt_frame) >= 0) {
+                                while (av.avcodec_receive_packet(enc_ctx, enc_packet) >= 0) {
+                                    enc_packet.*.stream_index = 0;
+                                    enc_packet.*.pts = av.av_rescale_q(enc_packet.*.pts, enc_ctx.*.time_base, output.video_stream.*.time_base);
+                                    enc_packet.*.dts = av.av_rescale_q(enc_packet.*.dts, enc_ctx.*.time_base, output.video_stream.*.time_base);
+                                    enc_packet.*.duration = av.av_rescale_q(enc_packet.*.duration, enc_ctx.*.time_base, output.video_stream.*.time_base);
+                                    _ = av.av_interleaved_write_frame(output.ctx, enc_packet);
+                                }
+                            }
+                            av.av_frame_unref(filt_frame);
+                        }
+                        gif_pts += gif_delay_ticks;
+                    } else {
+                        // Non-GIF: scale to encoder format and encode
+                        const out_frame = output_frame.?;
+                        _ = av.sws_scale(
+                            out_sws_ctx.?,
+                            &rgb_frame.*.data,
+                            &rgb_frame.*.linesize,
+                            0,
+                            rgb_frame.*.height,
+                            &out_frame.*.data,
+                            &out_frame.*.linesize,
+                        );
+                        out_frame.*.pts = if (frame.*.pts != av.AV_NOPTS_VALUE) frame.*.pts else @intCast(frame_count - 1);
+                        var enc_packet = av.av_packet_alloc();
+                        defer av.av_packet_free(&enc_packet);
+                        if (av.avcodec_send_frame(enc_ctx, out_frame) >= 0) {
+                            while (av.avcodec_receive_packet(enc_ctx, enc_packet) >= 0) {
+                                enc_packet.*.stream_index = 0;
+                                enc_packet.*.pts = av.av_rescale_q(enc_packet.*.pts, enc_ctx.*.time_base, output.video_stream.*.time_base);
+                                enc_packet.*.dts = av.av_rescale_q(enc_packet.*.dts, enc_ctx.*.time_base, output.video_stream.*.time_base);
+                                enc_packet.*.duration = av.av_rescale_q(enc_packet.*.duration, enc_ctx.*.time_base, output.video_stream.*.time_base);
+                                _ = av.av_interleaved_write_frame(output.ctx, enc_packet);
+                            }
                         }
                     }
                 } else {
@@ -672,6 +845,52 @@ fn producerTask(
             if (av.av_interleaved_write_frame(output.ctx, packet) < 0) {
                 return error.FailedToWriteAudioPacket;
             }
+        }
+    }
+
+    // Flush filters (for GIF) then encoder to ensure all delayed frames are written
+    if (op) |output| {
+        if (is_gif_output and gif_filter != null) {
+            _ = av.av_buffersrc_add_frame_flags(gif_filter.?.src, null, 0);
+            var filt_frame = av.av_frame_alloc();
+            defer av.av_frame_free(&filt_frame);
+            while (av.av_buffersink_get_frame(gif_filter.?.sink, filt_frame) >= 0) {
+                var pkt2 = av.av_packet_alloc();
+                defer av.av_packet_free(&pkt2);
+                if (av.avcodec_send_frame(enc_ctx, filt_frame) >= 0) {
+                    while (av.avcodec_receive_packet(enc_ctx, pkt2) >= 0) {
+                        pkt2.*.stream_index = 0;
+                        pkt2.*.pts = av.av_rescale_q(pkt2.*.pts, enc_ctx.*.time_base, output.video_stream.*.time_base);
+                        pkt2.*.dts = av.av_rescale_q(pkt2.*.dts, enc_ctx.*.time_base, output.video_stream.*.time_base);
+                        pkt2.*.duration = av.av_rescale_q(pkt2.*.duration, enc_ctx.*.time_base, output.video_stream.*.time_base);
+                        _ = av.av_interleaved_write_frame(output.ctx, pkt2);
+                    }
+                }
+                av.av_frame_unref(filt_frame);
+            }
+        }
+
+        var flush_pkt = av.av_packet_alloc();
+        defer av.av_packet_free(&flush_pkt);
+        _ = av.avcodec_send_frame(enc_ctx, null);
+        while (av.avcodec_receive_packet(enc_ctx, flush_pkt) >= 0) {
+            flush_pkt.*.stream_index = 0;
+            flush_pkt.*.pts = av.av_rescale_q(
+                flush_pkt.*.pts,
+                enc_ctx.*.time_base,
+                output.video_stream.*.time_base,
+            );
+            flush_pkt.*.dts = av.av_rescale_q(
+                flush_pkt.*.dts,
+                enc_ctx.*.time_base,
+                output.video_stream.*.time_base,
+            );
+            flush_pkt.*.duration = av.av_rescale_q(
+                flush_pkt.*.duration,
+                enc_ctx.*.time_base,
+                output.video_stream.*.time_base,
+            );
+            _ = av.av_interleaved_write_frame(output.ctx, flush_pkt);
         }
     }
 }

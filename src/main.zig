@@ -20,7 +20,7 @@ const video = if (build_options.av) @import("libglyphav") else struct {
 };
 
 const default_block = " .:coPO?@█";
-const default_ascii = " .:-=+*%@#";
+const default_ascii = " .:coPO?@#";
 const full_characters = " .-:=+iltIcsv1x%7aejorzfnuCJT3*69LYpqy25SbdgFGOVXkPhmw48AQDEHKUZR@B#NW0M";
 
 fn getDefaultChars(symbols: ?[]const u8) []const u8 {
@@ -99,6 +99,7 @@ pub fn isVideoFile(file_path: []const u8) bool {
             .@"video/quicktime",
             .@"video/webm",
             .@"video/x-msvideo",
+            .@"image/gif",
             => true,
             else => false,
         };
