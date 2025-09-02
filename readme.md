@@ -72,7 +72,7 @@ Glyph includes FFmpeg with support for both software and hardware-accelerated co
 
 #### Software Codecs
 - **x264** (`libx264`) - H.264 video encoder
-- **x265** (`libx265`) - HEVC/H.265 video encoder (decoder only)
+- **x265** (`libx265`) - HEVC/H.265 video encoder
 - **libmp3lame** - MP3 audio encoder
 - **libvorbis** - Vorbis audio encoder
 
