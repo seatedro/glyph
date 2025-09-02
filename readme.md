@@ -2,6 +2,9 @@
 
 Converts images and videos into ASCII art.
 
+![shinto-ascii](https://github.com/user-attachments/assets/a6676a76-3bdf-4a63-8629-e121a5943b7d)
+
+
 ## Installing
 
 ### Homebrew
@@ -71,8 +74,6 @@ Glyph includes FFmpeg with support for both software and hardware-accelerated co
 #### Hardware Codecs (Platform-dependent)
 - **NVIDIA NVENC** (`h264_nvenc`, `hevc_nvenc`) - Available on Windows/Linux with NVIDIA GPUs
 - **VideoToolbox** (`h264_videotoolbox`, `hevc_videotoolbox`) - Available on macOS
-- **VAAPI** (`h264_vaapi`, `hevc_vaapi`) - Available on Linux for Intel/AMD GPUs
-- **V4L2** (`h264_v4l2m2m`, `hevc_v4l2m2m`) - Available on Linux for various hardware
 
 Use the `--codec` parameter to specify the encoder. For example:
 ```bash
@@ -84,9 +85,6 @@ glyph -i input.mp4 -o output.mp4 --codec h264_nvenc
 
 # Hardware encoding (macOS)
 glyph -i input.mp4 -o output.mp4 --codec h264_videotoolbox
-
-# Hardware encoding (Linux VAAPI)
-glyph -i input.mp4 -o output.mp4 --codec h264_vaapi
 ```
 
 
