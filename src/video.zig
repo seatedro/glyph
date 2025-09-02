@@ -296,7 +296,7 @@ fn createEncoder(
     stream: *av.AVStream,
     args: core.CoreParams,
 ) !*av.AVCodecContext {
-    const encoder = if (args.codec) |codec| av.avcodec_find_encoder_by_name(codec.ptr) else blk: {
+    const encoder = if (args.codec) |codec| av.avcodec_find_encoder_by_name(codec.ptr) orelse return error.EncoderNotFound else blk: {
         if (args.output) |output_path| {
             const ext = std.fs.path.extension(output_path);
             if (std.mem.eql(u8, ext, ".gif")) {
@@ -341,13 +341,24 @@ fn createEncoder(
         const encoder_name = if (encoder.*.name) |name| std.mem.span(name) else "";
         if (std.mem.eql(u8, encoder_name, "mpeg4")) {
             enc_ctx.*.time_base = .{ .num = 1, .den = 25000 };
+        } else if (std.mem.eql(u8, encoder_name, "h264_nvenc") or std.mem.eql(u8, encoder_name, "hevc_nvenc")) {
+            enc_ctx.*.time_base = .{ .num = 1, .den = 90000 };
+            _ = av.av_opt_set(enc_ctx, "preset", "llhq", 0);
+            _ = av.av_opt_set(enc_ctx, "delay", "0", 0);
+            _ = av.av_opt_set(enc_ctx, "b_frames", "0", 0);
+            _ = av.av_opt_set(enc_ctx, "zerolatency", "1", 0);
+        } else if (std.mem.eql(u8, encoder_name, "h264_vaapi") or std.mem.eql(u8, encoder_name, "hevc_vaapi")) {
+            // TODO(ro): Implement VAAPI hardware frames context setup
+            // VAAPI encoders require proper hardware device context and frames allocation
+            // See: https://ffmpeg.org/doxygen/trunk/vaapi__encode_8c_source.html
+            @panic("VAAPI encoders are not implemented yet - requires hardware frames context setup");
         } else {
             enc_ctx.*.time_base = stream.time_base;
         }
 
         enc_ctx.*.framerate = .{
             .num = codec_ctx.framerate.num,
-            .den = 1,
+            .den = codec_ctx.framerate.den,
         };
         enc_ctx.*.gop_size = 10;
         enc_ctx.*.max_b_frames = 1;
