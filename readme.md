@@ -18,6 +18,11 @@ zig build -Doptimize=ReleaseFast
 ```
 The executable is placed at `./zig-out/bin`.
 
+To disable compiling ffmpeg and remove the libglyphav module:
+```bash
+zig build -Doptimize=ReleaseFast -Dav=false
+```
+
 Run directly with:
 ```bash
 zig build run -Doptimize=ReleaseFast -- [options]
