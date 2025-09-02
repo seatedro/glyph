@@ -3,6 +3,7 @@ const stb = @import("stb");
 const core = @import("libglyph");
 const bitmap = core.bitmap;
 const term = @import("libglyphterm");
+const rescale = @import("libglyphrescale");
 
 // -----------------------
 // IMAGE PROCESSING FUNCTIONS
@@ -18,11 +19,9 @@ pub fn downloadImage(allocator: std.mem.Allocator, url: []const u8) ![]u8 {
     var req = try client.open(.GET, uri, .{ .server_header_buffer = &buf });
     defer req.deinit();
 
-    // Sending HTTP req headers
     try req.send();
     try req.finish();
 
-    // Wait for response
     try req.wait();
 
     if (req.response.status != .ok) {
@@ -66,13 +65,11 @@ pub fn loadImage(allocator: std.mem.Allocator, path: []const u8) !core.Image {
 
     defer stb.stbi_image_free(data);
 
-    // Make sure w, h, and chan are valid to prevent integer overflow
     if (w <= 0 or h <= 0 or chan <= 0) {
         std.debug.print("Invalid image dimensions: w={d}, h={d}, chan={d}\n", .{ w, h, chan });
         return error.InvalidImageDimensions;
     }
 
-    // Validate buffer size to prevent overflow
     const total_pixels = @as(usize, @intCast(w)) * @as(usize, @intCast(h));
     const pixel_size = @as(usize, @intCast(chan));
     const buffer_size = total_pixels * (if (chan == 4) @as(usize, 3) else pixel_size);
@@ -80,34 +77,22 @@ pub fn loadImage(allocator: std.mem.Allocator, path: []const u8) !core.Image {
     var rgb_data = try allocator.alloc(u8, buffer_size);
     errdefer allocator.free(rgb_data);
 
-    const ext = std.fs.path.extension(path);
-    if (std.mem.eql(u8, ext, ".png")) {
-        // If image has 4 channels (RGBA), strip the alpha channel
-        if (chan == 4) {
-            var i: usize = 0;
-            var j: usize = 0;
-            while (i < total_pixels * 4) : (i += 4) {
-                rgb_data[j] = data[i]; // R
-                rgb_data[j + 1] = data[i + 1]; // G
-                rgb_data[j + 2] = data[i + 2]; // B
-                j += 3;
-            }
-
-            return core.Image{
-                .data = rgb_data,
-                .width = @intCast(w),
-                .height = @intCast(h),
-                .channels = 3,
-            };
+    // If image has 4 channels (RGBA), strip the alpha channel for consistency
+    if (chan == 4) {
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < total_pixels * 4) : (i += 4) {
+            rgb_data[j] = data[i]; // R
+            rgb_data[j + 1] = data[i + 1]; // G
+            rgb_data[j + 2] = data[i + 2]; // B
+            j += 3;
         }
-
-        @memcpy(rgb_data, data[0 .. total_pixels * @as(usize, @intCast(chan))]);
 
         return core.Image{
             .data = rgb_data,
             .width = @intCast(w),
             .height = @intCast(h),
-            .channels = @intCast(chan),
+            .channels = 3,
         };
     }
 
@@ -128,7 +113,6 @@ pub fn loadAndScaleImage(allocator: std.mem.Allocator, args: core.CoreParams) !c
     };
 
     if (args.scale != 1.0 and args.scale > 0.0) {
-        // Need to free the original image data after scaling
         defer allocator.free(original_img.data);
         return scaleImage(allocator, original_img, args.scale);
     } else {
@@ -143,38 +127,50 @@ pub fn scaleImage(allocator: std.mem.Allocator, img: core.Image, scale: f32) !co
     img_w = @max(img_w, 1);
     img_h = @max(img_h, 1);
 
-    const total_pixels = img_w * img_h;
-    const buffer_size = total_pixels * (if (img.channels == 4) @as(usize, 3) else img.channels);
+    if (img.channels == 4) {
+        const total_pixels = img.width * img.height;
+        var rgb_data = try allocator.alloc(u8, total_pixels * 3);
+        errdefer allocator.free(rgb_data);
 
-    const scaled_data = try allocator.alloc(u8, buffer_size);
-    errdefer allocator.free(scaled_data);
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < total_pixels * 4) : (i += 4) {
+            rgb_data[j] = img.data[i]; // R
+            rgb_data[j + 1] = img.data[i + 1]; // G
+            rgb_data[j + 2] = img.data[i + 2]; // B
+            j += 3;
+        }
 
-    const scaled_img = stb.stbir_resize_uint8_linear(
-        img.data.ptr,
-        @intCast(img.width),
-        @intCast(img.height),
-        0,
-        0,
-        @intCast(img_w),
-        @intCast(img_h),
-        0,
-        @intCast(img.channels),
-    );
-    if (scaled_img == null) {
-        std.debug.print("Error downscaling image\n", .{});
-        return error.ImageScaleFailed;
+        const rgb_img = core.Image{
+            .data = rgb_data,
+            .width = img.width,
+            .height = img.height,
+            .channels = 3,
+        };
+
+        const result = try rescale.resizeImage(
+            core.Image,
+            allocator,
+            rgb_img,
+            img_w,
+            img_h,
+            rescale.FilterType.Lanczos3,
+        );
+
+        // Free the temporary RGB buffer
+        allocator.free(rgb_data);
+
+        return result;
     }
 
-    defer stb.stbi_image_free(scaled_img);
-
-    @memcpy(scaled_data, scaled_img[0..buffer_size]);
-
-    return core.Image{
-        .data = scaled_data,
-        .width = img_w,
-        .height = img_h,
-        .channels = img.channels,
-    };
+    return rescale.resizeImage(
+        core.Image,
+        allocator,
+        img,
+        img_w,
+        img_h,
+        rescale.FilterType.Lanczos3,
+    );
 }
 
 pub fn generateAsciiTxt(
@@ -213,8 +209,15 @@ fn saveOutputTxt(ascii_text: []const u8, args: core.CoreParams) !void {
 }
 
 fn saveOutputImage(ascii_img: []u8, img: core.Image, args: core.CoreParams) !void {
-    var out_w = (img.width / args.block_size) * args.block_size;
-    var out_h = (img.height / args.block_size) * args.block_size;
+    var out_w: usize = undefined;
+    var out_h: usize = undefined;
+    if (args.render == .Pixels) {
+        out_w = img.width;
+        out_h = img.height;
+    } else {
+        out_w = (img.width / args.block_size) * args.block_size;
+        out_h = (img.height / args.block_size) * args.block_size;
+    }
 
     out_w = @max(out_w, 1);
     out_h = @max(out_h, 1);
@@ -223,7 +226,7 @@ fn saveOutputImage(ascii_img: []u8, img: core.Image, args: core.CoreParams) !voi
         @ptrCast(args.output.?.ptr),
         @intCast(out_w),
         @intCast(out_h),
-        @intCast(img.channels),
+        3, // ascii_img is RGB
         @ptrCast(ascii_img.ptr),
         @intCast(out_w * 3),
     );
@@ -259,13 +262,16 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
 
     switch (args.output_type) {
         core.OutputType.Image => {
-            const ascii_img = try core.generateAsciiArt(
-                allocator,
-                adjusted_img,
-                edge_result,
-                args,
-            );
-            try saveOutputImage(ascii_img, adjusted_img, args);
+            const out_img = if (args.render == .Pixels)
+                try core.generatePixelDither(allocator, adjusted_img, args)
+            else
+                try core.generateAsciiArt(
+                    allocator,
+                    adjusted_img,
+                    edge_result,
+                    args,
+                );
+            try saveOutputImage(out_img, adjusted_img, args);
         },
         core.OutputType.Stdout => {
             var t = try term.init(allocator, args.ascii_chars);
@@ -336,5 +342,3 @@ pub fn processImage(allocator: std.mem.Allocator, args: core.CoreParams) !void {
         else => {},
     }
 }
-
-// TESTS

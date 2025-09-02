@@ -14,21 +14,21 @@ const BuildOptions = struct {
     libglyph: *Module,
     stb: *Module,
     term: *Module,
-    libav: *Module,
-    video: *Module,
+    libav: ?*Module,
+    video: ?*Module,
     img: *Module,
     version: Version,
-    av_root: []const u8,
+    av_enabled: bool,
 };
 
 pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Omit debug information") orelse false;
-    const av_root = b.option([]const u8, "av_root", "Path to ffmpeg root") orelse "C:/ProgramData/chocolatey/lib/ffmpeg-shared/tools/ffmpeg-7.1-full_build-shared";
     const target = b.standardTargetOptions(.{});
     const dep_stb = b.dependency("stb", .{});
+    const av_enabled = b.option(bool, "av", "Enable FFmpeg/AV support") orelse true;
 
-    const version = try Version.parse("1.0.11");
+    const version = try Version.parse("1.1.0");
 
     const stb_module = b.addModule("stb", .{
         .root_source_file = b.path("vendor/stb.zig"),
@@ -37,18 +37,26 @@ pub fn build(b: *std.Build) !void {
     });
     stb_module.addIncludePath(dep_stb.path(""));
     stb_module.addCSourceFile(.{ .file = b.path("vendor/stb.c") });
-    const av_module = b.addModule("av", .{
-        .root_source_file = b.path("vendor/av.zig"),
+
+    var av_module: ?*Module = null;
+    if (av_enabled) {
+        if (b.lazyDependency("ffmpeg", .{})) |ffmpeg_dep| {
+            av_module = ffmpeg_dep.module("av");
+        }
+    }
+    const rescale_module = b.addModule("libglyphrescale", .{
+        .root_source_file = b.path("src/rescale.zig"),
         .target = target,
         .optimize = optimize,
     });
-    linkFfmpeg(b, target, av_module, av_root);
+
     const libglyph = b.addModule("libglyph", .{
         .root_source_file = b.path("src/core.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "stb", .module = stb_module },
+            .{ .name = "libglyphrescale", .module = rescale_module },
         },
     });
 
@@ -60,26 +68,36 @@ pub fn build(b: *std.Build) !void {
             .{ .name = "libglyph", .module = libglyph },
         },
     });
-    const video_module = b.addModule("libglyphav", .{
-        .root_source_file = b.path("src/video.zig"),
+
+    var video_module: ?*Module = null;
+    if (av_enabled) {
+        video_module = b.addModule("libglyphav", .{
+            .root_source_file = b.path("src/video.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "stb", .module = stb_module },
+                .{ .name = "av", .module = av_module.? },
+                .{ .name = "libglyph", .module = libglyph },
+                .{ .name = "libglyphterm", .module = term_module },
+            },
+        });
+    }
+
+    const image_module = b.addModule("libglyphimg", .{
+        .root_source_file = b.path("src/image.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "stb", .module = stb_module },
-            .{ .name = "av", .module = av_module },
             .{ .name = "libglyph", .module = libglyph },
             .{ .name = "libglyphterm", .module = term_module },
+            .{ .name = "libglyphrescale", .module = rescale_module },
         },
     });
-    const image_module = b.addModule("libglyphimg", .{
-        .root_source_file = b.path("src/image.zig"),
-        .imports = &.{
-            .{ .name = "stb", .module = stb_module },
-            .{ .name = "av", .module = av_module },
-            .{ .name = "libglyph", .module = libglyph },
-            .{ .name = "libglyphterm", .module = term_module },
-        },
-    });
+    if (av_enabled) {
+        image_module.addImport("av", av_module.?);
+    }
 
     const buildOpts = &BuildOptions{
         .libglyph = libglyph,
@@ -89,7 +107,7 @@ pub fn build(b: *std.Build) !void {
         .libav = av_module,
         .video = video_module,
         .version = version,
-        .av_root = av_root,
+        .av_enabled = av_enabled,
     };
 
     try runZig(
@@ -140,7 +158,27 @@ fn setupExecutable(
     exe.root_module.addImport("clap", clap.module("clap"));
     exe.root_module.addImport("libglyph", self.libglyph);
     exe.root_module.addImport("libglyphimg", self.img);
-    exe.root_module.addImport("libglyphav", self.video);
+    if (self.av_enabled) {
+        exe.root_module.addImport("libglyphav", self.video.?);
+        switch (target.result.os.tag) {
+            .macos => {
+                exe.linkFramework("CoreFoundation");
+                exe.linkFramework("CoreMedia");
+                exe.linkFramework("CoreVideo");
+                exe.linkFramework("VideoToolbox");
+            },
+            .linux => {
+                exe.linkSystemLibrary("va");
+                exe.linkSystemLibrary("cuda");
+                exe.linkSystemLibrary("cudart");
+            },
+            .windows => {
+                // nvenc uses dynamic loading on Windows, no need to link CUDA libraries
+                exe.linkSystemLibrary("ws2_32"); // Windows sockets
+            },
+            else => {},
+        }
+    }
     exe.root_module.addImport("libglyphterm", self.term);
 
     return exe;
@@ -166,63 +204,12 @@ fn setupTest(
     unit_test.root_module.addImport("clap", clap.module("clap"));
     unit_test.root_module.addImport("libglyph", self.libglyph);
     unit_test.root_module.addImport("libglyphimg", self.img);
-    unit_test.root_module.addImport("libglyphav", self.video);
+    if (self.av_enabled) {
+        unit_test.root_module.addImport("libglyphav", self.video.?);
+    }
     unit_test.root_module.addImport("libglyphterm", self.term);
 
     return unit_test;
-}
-
-fn copyDlls(b: *std.Build, target: std.Build.ResolvedTarget, av_root: []const u8) void {
-    if (target.result.os.tag != .windows) return;
-
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const ffmpeg_bin_path = std.fmt.bufPrint(&path_buf, "{s}/bin", .{av_root}) catch |err| {
-        std.debug.print("Failed to format ffmpeg bin path: {any}\n", .{err});
-        return;
-    };
-
-    // We can't walk the directory due to permissions with winget packages.
-    // Instead, we'll copy the DLLs we know we need by name.
-    // These names are for FFmpeg 7.x.
-    const dlls = [_][]const u8{
-        "avcodec-61.dll",
-        "avformat-61.dll",
-        "avutil-59.dll",
-        "swresample-5.dll",
-        "swscale-8.dll",
-    };
-
-    for (dlls) |dll_name| {
-        var dll_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const dll_path = std.fmt.bufPrint(&dll_path_buf, "{s}/{s}", .{ ffmpeg_bin_path, dll_name }) catch |err| {
-            std.debug.print("Failed to format src path: {any}\n", .{err});
-            return;
-        };
-        b.getInstallStep().dependOn(&b.addInstallBinFile(.{ .cwd_relative = dll_path }, dll_name).step);
-    }
-}
-
-fn linkFfmpeg(b: *std.Build, target: std.Build.ResolvedTarget, lib: *Module, av_root: []const u8) void {
-    if (target.result.os.tag == .windows) {
-        const ffmpeg_include_path = std.fs.path.join(b.allocator, &.{ av_root, "include" }) catch unreachable;
-        const ffmpeg_lib_path = std.fs.path.join(b.allocator, &.{ av_root, "lib" }) catch unreachable;
-        defer b.allocator.free(ffmpeg_include_path);
-        defer b.allocator.free(ffmpeg_lib_path);
-
-        lib.addLibraryPath(.{ .cwd_relative = ffmpeg_lib_path });
-        lib.addIncludePath(.{ .cwd_relative = ffmpeg_include_path });
-        lib.linkSystemLibrary("avformat", .{});
-        lib.linkSystemLibrary("avcodec", .{});
-        lib.linkSystemLibrary("avutil", .{});
-        lib.linkSystemLibrary("swscale", .{});
-        lib.linkSystemLibrary("swresample", .{});
-    } else {
-        lib.linkSystemLibrary("libavformat", .{ .use_pkg_config = .force });
-        lib.linkSystemLibrary("libavcodec", .{ .use_pkg_config = .force });
-        lib.linkSystemLibrary("libavutil", .{ .use_pkg_config = .force });
-        lib.linkSystemLibrary("libswscale", .{ .use_pkg_config = .force });
-        lib.linkSystemLibrary("libswresample", .{ .use_pkg_config = .force });
-    }
 }
 
 fn runZig(
@@ -232,8 +219,6 @@ fn runZig(
     optimize: std.builtin.OptimizeMode,
     strip: bool,
 ) !void {
-    copyDlls(b, target, self.av_root);
-
     const exe = try setupExecutable(
         self,
         b,
@@ -282,6 +267,7 @@ fn buildOptionsModule(self: *const BuildOptions, b: *std.Build) *Module {
     var opts = b.addOptions();
 
     opts.addOption(std.SemanticVersion, "version", self.version);
+    opts.addOption(bool, "av", self.av_enabled);
 
     const mod = opts.createModule();
     return mod;

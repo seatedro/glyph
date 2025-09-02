@@ -3,15 +3,24 @@ const builtin = @import("builtin");
 const clap = @import("clap");
 const core = @import("libglyph");
 const image = @import("libglyphimg");
-const video = @import("libglyphav");
-const term = @import("libglyphterm");
-const bitmap = core.bitmap;
 const build_options = @import("build_options");
+const term = @import("libglyphterm");
+const mime = @import("mime.zig");
+const bitmap = core.bitmap;
 const version = build_options.version;
 const version_string = std.fmt.comptimePrint("{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
 
+const video = if (build_options.av) @import("libglyphav") else struct {
+    pub fn isVideoFile(_: []const u8) bool {
+        return false;
+    }
+    pub fn processVideo(_: std.mem.Allocator, _: core.CoreParams) !void {
+        return error.AVDisabled;
+    }
+};
+
 const default_block = " .:coPO?@█";
-const default_ascii = " .:-=+*%@#";
+const default_ascii = " .:coPO?@#";
 const full_characters = " .-:=+iltIcsv1x%7aejorzfnuCJT3*69LYpqy25SbdgFGOVXkPhmw48AQDEHKUZR@B#NW0M";
 
 fn getDefaultChars(symbols: ?[]const u8) []const u8 {
@@ -77,6 +86,27 @@ fn hexToRgb(hex: []const u8) ![3]u8 {
     return .{ r, g, b };
 }
 
+pub fn isVideoFile(file_path: []const u8) bool {
+    const extension = std.fs.path.extension(file_path);
+    if (mime.extension_map.get(extension)) |mime_type| {
+        return switch (mime_type) {
+            .@"video/3gpp",
+            .@"video/3gpp2",
+            .@"video/mp2t",
+            .@"video/mp4",
+            .@"video/mpeg",
+            .@"video/ogg",
+            .@"video/quicktime",
+            .@"video/webm",
+            .@"video/x-msvideo",
+            .@"image/gif",
+            => true,
+            else => false,
+        };
+    }
+    return false;
+}
+
 // -----------------------
 // MAIN ENTRYPOINT AND HELPER FUNCTIONS
 // -----------------------
@@ -110,7 +140,9 @@ pub fn main() !void {
         \\    --keep_audio               Keeps the audio if input is a video
         \\    --stretched                Resizes media to fit terminal window
         \\-f, --frame_rate <f32>         Target frame rate for video output (default: matches input fps)
-        \\-d, --dither <str>             Dithering, supported values: "floydstein" (default: "floydstein")
+        \\-m, --mode <str>               Render mode: "ascii" or "pixels" (default: ascii)
+        \\-d, --dither <str>             Dithering: "none", "floydstein", "bayer4", "bayer8", "bayer16" (default: none)
+        \\    --dither_levels <u8>       Levels for ordered dither (default: 2)
         \\    --fg <str>                 Enter a hex value like "#ffffff" for the foreground color (default: "#d36a6f")
         \\    --bg <str>                 Enter a hex value like "#000000" for the background color (default: "#15091b")
         \\<str>...
@@ -145,12 +177,17 @@ pub fn main() !void {
         const ext = std.fs.path.extension(op);
         if (std.mem.eql(u8, ext, ".txt")) {
             break :blk core.OutputType.Text;
-        } else if (video.isVideoFile(op)) {
+        } else if (isVideoFile(op)) {
             break :blk core.OutputType.Video;
         } else {
             break :blk core.OutputType.Image;
         }
     } else core.OutputType.Stdout;
+
+    if (!build_options.av and output_type == core.OutputType.Video) {
+        std.debug.print("Error: Video output requested but AV support is disabled. Rebuild with -Dav.\n", .{});
+        std.process.exit(2);
+    }
 
     var ffmpeg_options = std.StringHashMap([]const u8).init(allocator);
     errdefer ffmpeg_options.deinit();
@@ -185,16 +222,24 @@ pub fn main() !void {
     const ascii_info = try core.initAsciiChars(allocator, ascii_chars);
 
     const dither = blk: {
-        if (res.args.dither != null) {
-            if (std.mem.eql(u8, res.args.dither.?, "floydstein")) {
-                break :blk core.DitherType.FloydSteinberg;
-            } else {
-                break :blk core.DitherType.None;
-            }
-        } else {
-            break :blk core.DitherType.None;
+        if (res.args.dither) |d| {
+            if (std.mem.eql(u8, d, "none")) break :blk core.DitherType.None;
+            if (std.mem.eql(u8, d, "floydstein")) break :blk core.DitherType.FloydSteinberg;
+            if (std.mem.eql(u8, d, "bayer4")) break :blk core.DitherType.Bayer4;
+            if (std.mem.eql(u8, d, "bayer8")) break :blk core.DitherType.Bayer8;
+            if (std.mem.eql(u8, d, "bayer16")) break :blk core.DitherType.Bayer16;
         }
+        break :blk core.DitherType.None;
     };
+
+    const render: core.RenderType = blk: {
+        if (res.args.mode) |m| {
+            if (std.mem.eql(u8, m, "pixels")) break :blk .Pixels;
+        }
+        break :blk .Ascii;
+    };
+
+    const dither_levels: u8 = res.args.dither_levels orelse 2;
 
     const fg_color = blk: {
         if (res.args.fg != null) {
@@ -230,11 +275,19 @@ pub fn main() !void {
         .frame_rate = res.args.frame_rate,
         .stretched = res.args.stretched != 0,
         .dither = dither,
+        .render = render,
+        .dither_levels = dither_levels,
         .fg_color = fg_color,
         .bg_color = bg_color,
     };
 
-    if (video.isVideoFile(args.input)) {
+    const input_is_video = isVideoFile(args.input);
+    if (input_is_video and !build_options.av) {
+        std.debug.print("Error: Video input detected but AV support is disabled. Rebuild with -Dav.\n", .{});
+        std.process.exit(2);
+    }
+
+    if (input_is_video) {
         try video.processVideo(allocator, args);
     } else {
         try image.processImage(allocator, args);
